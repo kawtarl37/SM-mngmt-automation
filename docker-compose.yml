@@ -1,0 +1,11 @@
+services:
+  automation:
+    build: .
+    container_name: automation-egf
+    env_file:
+      - .env
+    volumes:
+      # Mount .tmp so intermediate files persist on the host
+      - ./.tmp:/app/.tmp
+    stdin_open: true
+    tty: true
