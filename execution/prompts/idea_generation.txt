@@ -1,0 +1,20 @@
+Generate exactly 20 unique content ideas for Pinterest pins.
+
+Here are the top trending topics in the gluten-free community right now:
+{trending_topics}
+
+Here is a list of existing recipe titles on the website. DO NOT duplicate these:
+{existing_titles}
+
+Provide ideas that fall into these categories:
+- Recipes (comfort food, easy dinners, baking)
+- Gluten-Free Education (baking tips, substitution guides)
+- Kitchen & Lifestyle (tools, pantry essentials)
+
+Rules:
+- Make sure titles are extremely catchy but avoid banned "marketing fluff" words
+- Descriptions should be brief and clearly state the value proposition
+- Target keywords should be realistic search phrases
+- The ideas must be tailored to Claire Bennett's witty and relatable brand voice
+
+Return the response matching the specified JSON structure.
