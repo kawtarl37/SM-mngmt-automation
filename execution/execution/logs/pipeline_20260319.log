@@ -1,0 +1,18 @@
+{"time": "2026-03-19 13:06:14,307", "level": "INFO", "module": "wordpress_crawler", "msg": "Starting WordPress crawler..."}
+{"time": "2026-03-19 13:06:14,309", "level": "INFO", "module": "wordpress_crawler", "msg": "Fetching WP page 1/1..."}
+{"time": "2026-03-19 13:06:16,272", "level": "INFO", "module": "wordpress_crawler", "msg": "Fetching WP page 2/4..."}
+{"time": "2026-03-19 13:06:17,136", "level": "INFO", "module": "wordpress_crawler", "msg": "Fetching WP page 3/4..."}
+{"time": "2026-03-19 13:06:17,808", "level": "INFO", "module": "wordpress_crawler", "msg": "Fetching WP page 4/4..."}
+{"time": "2026-03-19 13:06:18,419", "level": "INFO", "module": "wordpress_crawler", "msg": "WordPress crawler completed. Newly saved recipes/posts: 320"}
+{"time": "2026-03-19 13:06:21,547", "level": "INFO", "module": "reddit_scraper", "msg": "Starting Reddit public JSON scraper..."}
+{"time": "2026-03-19 13:06:21,547", "level": "INFO", "module": "reddit_scraper", "msg": "Fetching r/glutenfree..."}
+{"time": "2026-03-19 13:06:24,474", "level": "INFO", "module": "reddit_scraper", "msg": "Saved 39 posts from r/glutenfree"}
+{"time": "2026-03-19 13:06:24,476", "level": "INFO", "module": "reddit_scraper", "msg": "Fetching r/glutenfreebaking..."}
+{"time": "2026-03-19 13:06:26,932", "level": "INFO", "module": "reddit_scraper", "msg": "Saved 5 posts from r/glutenfreebaking"}
+{"time": "2026-03-19 13:06:26,932", "level": "INFO", "module": "reddit_scraper", "msg": "Fetching r/glutenfreecooking..."}
+{"time": "2026-03-19 13:06:29,249", "level": "INFO", "module": "reddit_scraper", "msg": "Saved 0 posts from r/glutenfreecooking"}
+{"time": "2026-03-19 13:06:29,249", "level": "INFO", "module": "reddit_scraper", "msg": "Fetching r/glutenfreerecipes..."}
+{"time": "2026-03-19 13:06:31,657", "level": "INFO", "module": "reddit_scraper", "msg": "Saved 2 posts from r/glutenfreerecipes"}
+{"time": "2026-03-19 13:06:31,660", "level": "INFO", "module": "reddit_scraper", "msg": "Fetching r/celiac..."}
+{"time": "2026-03-19 13:06:34,336", "level": "INFO", "module": "reddit_scraper", "msg": "Saved 34 posts from r/celiac"}
+{"time": "2026-03-19 13:06:34,336", "level": "INFO", "module": "reddit_scraper", "msg": "Reddit scraper completed. Total posts saved: 80"}

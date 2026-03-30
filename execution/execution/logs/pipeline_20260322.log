@@ -1,0 +1,126 @@
+{"time": "2026-03-22 15:10:09,570", "level": "INFO", "module": "idea_scorer", "msg": "Starting idea scoring and selection..."}
+{"time": "2026-03-22 15:10:09,586", "level": "ERROR", "module": "idea_scorer", "msg": "No unselected ideas exist for 2026-03-22."}
+{"time": "2026-03-22 15:11:16,865", "level": "INFO", "module": "trend_analyzer", "msg": "Ranking imported trend topics..."}
+{"time": "2026-03-22 15:11:16,932", "level": "INFO", "module": "trend_analyzer", "msg": "Ranked 80 topics."}
+{"time": "2026-03-22 15:11:33,320", "level": "INFO", "module": "idea_generator", "msg": "Starting idea generation..."}
+{"time": "2026-03-22 15:11:33,430", "level": "INFO", "module": "llm_client", "msg": "Calling gpt-4o-mini for task: idea_generation"}
+{"time": "2026-03-22 15:11:37,462", "level": "ERROR", "module": "llm_client", "msg": "LLM call failed: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}", "exc_info": "Traceback (most recent call last):\n  File \"c:\\Users\\HP\\Documents\\automation-EGF\\execution\\utils\\llm_client.py\", line 23, in generate_structured\n    completion = self.client.beta.chat.completions.parse(\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\HP\\Documents\\automation-EGF\\venv\\Lib\\site-packages\\openai\\resources\\chat\\completions\\completions.py\", line 191, in parse\n    return self._post(\n           ^^^^^^^^^^^\n  File \"C:\\Users\\HP\\Documents\\automation-EGF\\venv\\Lib\\site-packages\\openai\\_base_client.py\", line 1297, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\HP\\Documents\\automation-EGF\\venv\\Lib\\site-packages\\openai\\_base_client.py\", line 1070, in request\n    raise self._make_status_error_from_response(err.response) from None\nopenai.RateLimitError: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}"}
+{"time": "2026-03-22 15:11:37,532", "level": "ERROR", "module": "idea_generator", "msg": "Error during idea generation: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}"}
+{"time": "2026-03-22 15:12:22,748", "level": "INFO", "module": "idea_scorer", "msg": "Starting idea scoring and selection..."}
+{"time": "2026-03-22 15:12:22,748", "level": "ERROR", "module": "idea_scorer", "msg": "No unselected ideas exist for 2026-03-22."}
+{"time": "2026-03-22 15:37:16,550", "level": "INFO", "module": "wordpress_crawler", "msg": "Starting WordPress crawler..."}
+{"time": "2026-03-22 15:37:16,553", "level": "INFO", "module": "wordpress_crawler", "msg": "Fetching WP page 1/1..."}
+{"time": "2026-03-22 15:37:17,908", "level": "ERROR", "module": "wordpress_crawler", "msg": "Failed to fetch WP posts page 1: Expecting value: line 1 column 1 (char 0)"}
+{"time": "2026-03-22 15:37:17,910", "level": "INFO", "module": "wordpress_crawler", "msg": "WordPress crawler completed. Newly saved recipes/posts: 0"}
+{"time": "2026-03-22 16:09:15,775", "level": "INFO", "module": "wordpress_crawler", "msg": "Starting HTML crawler on https://easygluten-free.com/recipes/..."}
+{"time": "2026-03-22 16:09:16,274", "level": "INFO", "module": "wordpress_crawler", "msg": "Found 10 articles/recipes on page."}
+{"time": "2026-03-22 16:09:16,291", "level": "INFO", "module": "wordpress_crawler", "msg": "HTML crawler completed. Newly saved recipes: 10"}
+{"time": "2026-03-22 16:13:45,157", "level": "INFO", "module": "idea_generator", "msg": "Starting idea generation..."}
+{"time": "2026-03-22 16:13:45,272", "level": "INFO", "module": "llm_client", "msg": "Calling gpt-4o-mini for task: idea_generation"}
+{"time": "2026-03-22 16:14:15,001", "level": "INFO", "module": "llm_client", "msg": "LLM call successful. Cost: $0.0008"}
+{"time": "2026-03-22 16:14:15,018", "level": "INFO", "module": "idea_generator", "msg": "Saved 18 new ideas to DB."}
+{"time": "2026-03-22 16:16:29,246", "level": "INFO", "module": "idea_scorer", "msg": "Starting idea scoring and selection..."}
+{"time": "2026-03-22 16:16:29,284", "level": "INFO", "module": "idea_scorer", "msg": "Selected Top 3 ideas for pinning."}
+{"time": "2026-03-22 16:19:18,715", "level": "INFO", "module": "pin_assembler", "msg": "Starting pin assembly sequence..."}
+{"time": "2026-03-22 16:19:18,715", "level": "INFO", "module": "caption_generator", "msg": "Starting caption generation for pending pins..."}
+{"time": "2026-03-22 16:19:18,796", "level": "INFO", "module": "caption_generator", "msg": "Generating caption for pin: Slice of Heaven: Gluten-Free Bread"}
+{"time": "2026-03-22 16:19:18,796", "level": "INFO", "module": "llm_client", "msg": "Calling gpt-4o-mini for task: caption_generation"}
+{"time": "2026-03-22 16:19:23,054", "level": "INFO", "module": "llm_client", "msg": "LLM call successful. Cost: $0.0001"}
+{"time": "2026-03-22 16:19:23,054", "level": "INFO", "module": "caption_generator", "msg": "Generating caption for pin: Tantalizing Gluten-Free Taco Night"}
+{"time": "2026-03-22 16:19:23,055", "level": "INFO", "module": "llm_client", "msg": "Calling gpt-4o-mini for task: caption_generation"}
+{"time": "2026-03-22 16:19:27,783", "level": "INFO", "module": "llm_client", "msg": "LLM call successful. Cost: $0.0001"}
+{"time": "2026-03-22 16:19:27,783", "level": "INFO", "module": "caption_generator", "msg": "Generating caption for pin: Donut Worry, Be Gluten-Free!"}
+{"time": "2026-03-22 16:19:27,783", "level": "INFO", "module": "llm_client", "msg": "Calling gpt-4o-mini for task: caption_generation"}
+{"time": "2026-03-22 16:19:30,849", "level": "INFO", "module": "llm_client", "msg": "LLM call successful. Cost: $0.0001"}
+{"time": "2026-03-22 16:19:30,865", "level": "INFO", "module": "caption_generator", "msg": "Successfully generated captions for 3 pins."}
+{"time": "2026-03-22 16:19:30,865", "level": "INFO", "module": "image_generator", "msg": "Starting image generation for pending pins..."}
+{"time": "2026-03-22 16:19:30,877", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Slice of Heaven: Gluten-Free Bread You Can Enjoy' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:19:30,877", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:19:31,883", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Slice of Heaven: Gluten-Free Bread You Can Enjoy' (Attempt 2/3)..."}
+{"time": "2026-03-22 16:19:31,883", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:19:33,885", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Slice of Heaven: Gluten-Free Bread You Can Enjoy' (Attempt 3/3)..."}
+{"time": "2026-03-22 16:19:33,886", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:19:37,888", "level": "ERROR", "module": "image_generator", "msg": "Failed to generate image after all retries."}
+{"time": "2026-03-22 16:19:37,890", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Tantalizing Gluten-Free Taco Night Awaits You!' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:19:37,890", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:19:38,892", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Tantalizing Gluten-Free Taco Night Awaits You!' (Attempt 2/3)..."}
+{"time": "2026-03-22 16:19:38,892", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:19:40,895", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Tantalizing Gluten-Free Taco Night Awaits You!' (Attempt 3/3)..."}
+{"time": "2026-03-22 16:19:40,895", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:19:44,897", "level": "ERROR", "module": "image_generator", "msg": "Failed to generate image after all retries."}
+{"time": "2026-03-22 16:19:44,898", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Donut Worry, Be Gluten-Free: Delicious Treat Ahead!' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:19:44,898", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:19:45,901", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Donut Worry, Be Gluten-Free: Delicious Treat Ahead!' (Attempt 2/3)..."}
+{"time": "2026-03-22 16:19:45,901", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:19:47,904", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Donut Worry, Be Gluten-Free: Delicious Treat Ahead!' (Attempt 3/3)..."}
+{"time": "2026-03-22 16:19:47,904", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:19:51,906", "level": "ERROR", "module": "image_generator", "msg": "Failed to generate image after all retries."}
+{"time": "2026-03-22 16:19:51,907", "level": "INFO", "module": "pin_assembler", "msg": "Pin assembly sequence complete. Pins are now stored in the DB as 'pending' review."}
+{"time": "2026-03-22 16:30:36,420", "level": "INFO", "module": "image_generator", "msg": "Starting image generation for pending pins..."}
+{"time": "2026-03-22 16:30:36,422", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Slice of Heaven: Gluten-Free Bread You Can Enjoy' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:30:36,422", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:30:37,424", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Slice of Heaven: Gluten-Free Bread You Can Enjoy' (Attempt 2/3)..."}
+{"time": "2026-03-22 16:30:37,426", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:30:39,426", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Slice of Heaven: Gluten-Free Bread You Can Enjoy' (Attempt 3/3)..."}
+{"time": "2026-03-22 16:30:39,426", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:30:43,429", "level": "ERROR", "module": "image_generator", "msg": "Failed to generate image after all retries."}
+{"time": "2026-03-22 16:30:43,429", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Tantalizing Gluten-Free Taco Night Awaits You!' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:30:43,429", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:30:44,433", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Tantalizing Gluten-Free Taco Night Awaits You!' (Attempt 2/3)..."}
+{"time": "2026-03-22 16:30:44,434", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:30:46,436", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Tantalizing Gluten-Free Taco Night Awaits You!' (Attempt 3/3)..."}
+{"time": "2026-03-22 16:30:46,436", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:30:50,437", "level": "ERROR", "module": "image_generator", "msg": "Failed to generate image after all retries."}
+{"time": "2026-03-22 16:30:50,437", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Donut Worry, Be Gluten-Free: Delicious Treat Ahead!' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:30:50,437", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:30:51,442", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Donut Worry, Be Gluten-Free: Delicious Treat Ahead!' (Attempt 2/3)..."}
+{"time": "2026-03-22 16:30:51,442", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:30:53,445", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Donut Worry, Be Gluten-Free: Delicious Treat Ahead!' (Attempt 3/3)..."}
+{"time": "2026-03-22 16:30:53,445", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: module 'google.generativeai' has no attribute 'ImageGenerationModel'"}
+{"time": "2026-03-22 16:30:57,448", "level": "ERROR", "module": "image_generator", "msg": "Failed to generate image after all retries."}
+{"time": "2026-03-22 16:33:18,514", "level": "INFO", "module": "image_generator", "msg": "Starting image generation for pending pins..."}
+{"time": "2026-03-22 16:33:18,578", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Slice of Heaven: Gluten-Free Bread You Can Enjoy' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:33:40,913", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_1.jpg'"}
+{"time": "2026-03-22 16:33:41,914", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Slice of Heaven: Gluten-Free Bread You Can Enjoy' (Attempt 2/3)..."}
+{"time": "2026-03-22 16:34:03,721", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_1.jpg'"}
+{"time": "2026-03-22 16:34:05,722", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Slice of Heaven: Gluten-Free Bread You Can Enjoy' (Attempt 3/3)..."}
+{"time": "2026-03-22 16:34:28,677", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_1.jpg'"}
+{"time": "2026-03-22 16:34:32,679", "level": "ERROR", "module": "image_generator", "msg": "Failed to generate image after all retries."}
+{"time": "2026-03-22 16:34:32,700", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Tantalizing Gluten-Free Taco Night Awaits You!' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:34:54,730", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_2.jpg'"}
+{"time": "2026-03-22 16:34:55,736", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Tantalizing Gluten-Free Taco Night Awaits You!' (Attempt 2/3)..."}
+{"time": "2026-03-22 16:35:19,134", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_2.jpg'"}
+{"time": "2026-03-22 16:35:21,136", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Tantalizing Gluten-Free Taco Night Awaits You!' (Attempt 3/3)..."}
+{"time": "2026-03-22 16:35:39,492", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_2.jpg'"}
+{"time": "2026-03-22 16:35:43,500", "level": "ERROR", "module": "image_generator", "msg": "Failed to generate image after all retries."}
+{"time": "2026-03-22 16:35:43,508", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Donut Worry, Be Gluten-Free: Delicious Treat Ahead!' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:36:05,409", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_3.jpg'"}
+{"time": "2026-03-22 16:36:06,412", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Donut Worry, Be Gluten-Free: Delicious Treat Ahead!' (Attempt 2/3)..."}
+{"time": "2026-03-22 16:36:33,557", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_3.jpg'"}
+{"time": "2026-03-22 16:36:35,559", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Donut Worry, Be Gluten-Free: Delicious Treat Ahead!' (Attempt 3/3)..."}
+{"time": "2026-03-22 16:36:54,733", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_3.jpg'"}
+{"time": "2026-03-22 16:36:58,735", "level": "ERROR", "module": "image_generator", "msg": "Failed to generate image after all retries."}
+{"time": "2026-03-22 16:36:58,735", "level": "INFO", "module": "image_generator", "msg": "Starting image generation for pending pins..."}
+{"time": "2026-03-22 16:36:58,759", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Slice of Heaven: Gluten-Free Bread You Can Enjoy' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:37:19,131", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_1.jpg'"}
+{"time": "2026-03-22 16:37:20,138", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Slice of Heaven: Gluten-Free Bread You Can Enjoy' (Attempt 2/3)..."}
+{"time": "2026-03-22 16:37:47,135", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_1.jpg'"}
+{"time": "2026-03-22 16:37:49,136", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Slice of Heaven: Gluten-Free Bread You Can Enjoy' (Attempt 3/3)..."}
+{"time": "2026-03-22 16:38:09,004", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_1.jpg'"}
+{"time": "2026-03-22 16:38:13,006", "level": "ERROR", "module": "image_generator", "msg": "Failed to generate image after all retries."}
+{"time": "2026-03-22 16:38:13,021", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Tantalizing Gluten-Free Taco Night Awaits You!' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:38:31,800", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_2.jpg'"}
+{"time": "2026-03-22 16:38:32,801", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Tantalizing Gluten-Free Taco Night Awaits You!' (Attempt 2/3)..."}
+{"time": "2026-03-22 16:38:55,061", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_2.jpg'"}
+{"time": "2026-03-22 16:38:57,063", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Tantalizing Gluten-Free Taco Night Awaits You!' (Attempt 3/3)..."}
+{"time": "2026-03-22 16:38:58,775", "level": "INFO", "module": "image_generator", "msg": "Starting image generation for pending pins..."}
+{"time": "2026-03-22 16:38:58,845", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Slice of Heaven: Gluten-Free Bread You Can Enjoy' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:39:17,360", "level": "WARNING", "module": "image_generator", "msg": "Image generation failed: [Errno 2] No such file or directory: 'C:\\\\Users\\\\HP\\\\Documents\\\\automation-EGF\\\\.tmp\\\\pins\\\\pin_2.jpg'"}
+{"time": "2026-03-22 16:39:20,471", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Tantalizing Gluten-Free Taco Night Awaits You!' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:39:21,363", "level": "ERROR", "module": "image_generator", "msg": "Failed to generate image after all retries."}
+{"time": "2026-03-22 16:39:21,397", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Donut Worry, Be Gluten-Free: Delicious Treat Ahead!' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:39:44,235", "level": "INFO", "module": "image_generator", "msg": "Successfully generated 1 images."}
+{"time": "2026-03-22 16:39:45,385", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Donut Worry, Be Gluten-Free: Delicious Treat Ahead!' (Attempt 1/3)..."}
+{"time": "2026-03-22 16:40:18,247", "level": "INFO", "module": "image_generator", "msg": "Successfully generated 3 images."}
+{"time": "2026-03-22 16:40:18,247", "level": "INFO", "module": "image_generator", "msg": "Starting image generation for pending pins..."}
+{"time": "2026-03-22 16:40:18,251", "level": "INFO", "module": "image_generator", "msg": "No pins needing images right now."}

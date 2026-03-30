@@ -35,7 +35,7 @@ WORDPRESS_URL = os.getenv("WORDPRESS_URL", "https://easygluten-free.com/")
 DAILY_PIN_COUNT = 3
 DAILY_IDEA_GENERATION_COUNT = 20
 TEXT_PREFERENCE_MODEL = "gpt-4o-mini" # Primary model
-IMAGE_GENERATION_MODEL = "gemini-2.0-flash-exp" # Nano Banana
+IMAGE_GENERATION_MODEL = "imagen-4.0-generate-001" # Imagen 4.0 Approved
 
 # Directories
 PROMPTS_DIR = BASE_DIR / "execution" / "prompts"

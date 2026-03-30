@@ -1,4 +1,5 @@
 import requests
+from bs4 import BeautifulSoup
 import re
 from execution.config import WORDPRESS_URL
 from execution.db import get_connection
@@ -10,56 +11,46 @@ def normalize_title(title: str) -> str:
     """Normalize a title for strict deduplication matching."""
     stop_words = {"best", "easy", "simple", "fluffy", "perfect", "quick", "the", "a", "an", "how", "to", "make"}
     words = title.lower().replace("-", " ").replace("|", " ").split()
-    # Strip non-alphanumeric chars
     words = [re.sub(r'[^a-z0-9]', '', w) for w in words]
     return " ".join(w for w in words if w and w not in stop_words)
 
-def fetch_wp_posts(page: int = 1, per_page: int = 100):
-    """Fetch posts from the WordPress REST API."""
-    url = f"{WORDPRESS_URL.rstrip('/')}/wp-json/wp/v2/posts"
-    params = {
-        "page": page,
-        "per_page": per_page,
-        "status": "publish",
-        "_fields": "id,title,link"
-    }
-    
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        return response.json(), int(response.headers.get("X-WP-TotalPages", 1))
-    except Exception as e:
-        logger.error(f"Failed to fetch WP posts page {page}: {e}")
-        return [], 0
-
 def run_crawler():
-    """Main entrypoint: crawl the WP API to build the existing recipes database."""
-    logger.info("Starting WordPress crawler...")
+    """Main entrypoint: crawl the provided recipes HTML page to build the existing recipes database."""
+    logger.info(f"Starting HTML crawler on {WORDPRESS_URL}...")
     
-    page = 1
-    total_pages = 1
     total_saved = 0
-    
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    try:
+        response = requests.get(WORDPRESS_URL, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
         
-        while page <= total_pages:
-            logger.info(f"Fetching WP page {page}/{total_pages}...")
-            posts, parsed_total_pages = fetch_wp_posts(page)
+        articles = soup.find_all('article')
+        logger.info(f"Found {len(articles)} articles/recipes on page.")
+        
+        with get_connection() as conn:
+            cursor = conn.cursor()
             
-            if page == 1:
-                total_pages = parsed_total_pages
+            for index, article in enumerate(articles):
+                # Try to find a link to the recipe
+                link_tag = article.find('a')
+                if not link_tag or not link_tag.get('href'):
+                    continue
+                url = link_tag['href']
                 
-            for post in posts:
-                # Raw title often comes with HTML entities like &#8211;
-                raw_title = post.get("title", {}).get("rendered", "")
+                # Try to find the title, usually in an h2 or h3, or use link text
+                title_tag = article.find(['h2', 'h3'])
+                if title_tag:
+                    raw_title = title_tag.text.strip()
+                elif link_tag.text.strip():
+                    raw_title = link_tag.text.strip()
+                else:
+                    raw_title = f"Recipe {index+1}"
                 
-                # Basic entity decoding (WordPress API usually uses numeric entities for dashes)
+                # Basic entity decoding
                 title = raw_title.replace("&#8211;", "-").replace("&#8217;", "'").replace("&#038;", "&")
                 normalized = normalize_title(title)
-                url = post.get("link", "")
                 
-                # Insert or ignore (using a basic check to prevent duplicates if crawler runs multiple times)
+                # Insert or ignore based on URL
                 cursor.execute(
                     "SELECT recipe_id FROM recipes WHERE url = ?", (url,)
                 )
@@ -68,16 +59,19 @@ def run_crawler():
                         """INSERT INTO recipes 
                            (title, title_normalized, source, url)
                            VALUES (?, ?, ?, ?)""",
-                        (title, normalized, "wordpress", url)
+                        (title, normalized, "wordpress_html", url)
                     )
                     total_saved += 1
             
-            page += 1
+            conn.commit()
             
-        conn.commit()
+        logger.info(f"HTML crawler completed. Newly saved recipes: {total_saved}")
         
-    logger.info(f"WordPress crawler completed. Newly saved recipes/posts: {total_saved}")
+    except Exception as e:
+        logger.error(f"Failed to crawl {WORDPRESS_URL}: {e}")
+        
     return total_saved
 
 if __name__ == "__main__":
     run_crawler()
+

@@ -1,9 +1,40 @@
-Photorealistic food photography of {dish_name}.
-Setting: The Sunday Light Kitchen — sage cabinets, cream countertops, wooden shelves,
-copper cookware, soft natural window lighting.
-Style: warm, natural, realistic, food-focused.
-Composition: overhead shot, {dish_name} centered on a rustic ceramic plate.
-Lighting: golden hour, soft shadows.
-Format: vertical 1000x1500 Pinterest pin.
-No text overlays. No watermarks. No artificial staging.
-The food must look realistically gluten-free with appropriate textures.
+Ultra-realistic food photography of {dish_name} in a cozy home kitchen.
+
+STYLE:
+- Pinterest-style candid food photo
+- Close-up or 3/4 angle, food is the clear hero
+- Slightly off-center, natural framing (not staged)
+
+LIGHTING:
+- Warm natural window light (morning or golden hour)
+- Soft shadows, no artificial or studio lighting
+
+TEXTURE:
+- Realistic gluten-free texture (natural crumb, slightly imperfect)
+- Soft, appetizing, believable — not glossy or plastic
+- Small imperfections allowed (crumbs, uneven edges, slight cracks)
+
+SETTING:
+- Wooden or ceramic surface (board, plate, or stoneware)
+- Minimal, subtle props in soft blur (linen, jar, spoon)
+- Warm, natural color palette (browns, creams, muted greens)
+
+CAMERA FEEL:
+- Shallow depth of field
+- Slight background blur
+- Looks strictly like an iPhone home food photography shot, straight from the camera roll
+- Candid, casual, approachable angle
+
+STRICTLY AVOID:
+- text, logos, overlays
+- poster or ad-style composition
+- graphic layouts or borders
+- artificial lighting or perfect studio setup
+- overly perfect symmetry
+- fake shine or smooth plastic textures
+- cluttered scenes or too many props
+- unrealistic gluten-free baked textures
+- hands or people
+
+GOAL:
+A candid, cozy, real-life Pinterest food photo that looks homemade, not AI-generated.
