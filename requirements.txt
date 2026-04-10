@@ -1,7 +1,16 @@
-# Add Python dependencies here, one per line.
-# Example:
-# google-api-python-client==2.149.0
-# google-auth-oauthlib==1.2.1
-# python-dotenv==1.0.1
+# EGF Automation — Python Dependencies
 
-python-dateutil==2.9.0.post0
+# Core
+openai>=1.30.0
+google-genai>=1.0.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Web Dashboard
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# Scheduling timezone support
+# zoneinfo is built-in (Python 3.9+), but tzdata is needed on Windows
+tzdata>=2024.1
