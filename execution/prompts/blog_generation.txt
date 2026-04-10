@@ -1,0 +1,22 @@
+You are generating a full SEO-optimized, AI-search-optimized blog post for the Easy Gluten Free brand (easygluten-free.com).
+
+TOPIC: {pin_topic}
+PIN DESCRIPTION: {pin_description}
+
+AMAZON PRODUCT TO FEATURE IN SECTION 2:
+- Title: {product_title}
+- Description: {product_description}
+
+RULES:
+1. Write in the EGF brand voice: witty, lightly sarcastic, warm, and relatable (Claire Bennett persona).
+2. Address REAL gluten-free pain points sourced from Reddit and the GF community.
+3. The `main_title` must be strong for SEO, natural to read, and based on the topic above. Do NOT use generic phrases like "ultimate guide" or "game changer".
+4. The `ebook_hero_title` is NOT the SEO title. It must promote the free e-book: "Your 7-Day Beginner's Guide to Delicious & Stress-Free Meals." Make it compelling and relevant to the topic.
+5. Section 2 MUST naturally lead into and relate to the Amazon product provided. Write `section_2_content` so the product feels like an organic recommendation, not a forced ad.
+6. All section content fields may use basic HTML tags: <p>, <ul>, <ol>, <li>, <strong>, <em>. Do not use <h1>, <h2>, <h3> — those are handled by the template.
+7. All 5 sections must be substantive (150-250 words each), non-redundant, and genuinely useful.
+8. Takeaways must be concise, punchy, and actionable — one sentence each.
+9. Category must be one of: "Gluten-Free Living", "Recipes", "Tips & Tools", "Meal Planning", "Baking".
+10. Do NOT invent product data. Use only the product details provided above.
+11. Avoid keyword stuffing. Weave keywords naturally.
+12. Do NOT use emojis in the blog body.

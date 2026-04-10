@@ -1,0 +1,132 @@
+# Directive: Generate and Publish Blog from Approved Pin
+
+## Purpose
+After a Pinterest pin is approved in the dashboard, this directive governs the automated pipeline that:
+1. Generates a full SEO-optimized blog post from the pin's topic
+2. Publishes the blog (with featured image) to WordPress
+3. Posts the pin to Pinterest with the blog URL as the external link
+
+Publishing is scheduled at **3 times per day** — 8 AM, 12 PM, and 4 PM **US Eastern Time**.
+
+---
+
+## Inputs
+- An approved `pin_id` from the `generated_pins` table (status = `approved`)
+- The pin's `title`, `description`, and `image_path`
+- The next Amazon product to rotate (picked by oldest `last_used` date from `amazon_products` table)
+- WordPress REST API credentials (`WP_BASE_URL`, `WP_USERNAME`, `WP_APP_PASSWORD` in `.env`)
+- Pinterest API access token and board ID in `.env`
+
+---
+
+## Full Pipeline Flow
+
+```
+[Dashboard: Pin Approved]
+        ↓
+[publish_scheduler.py → schedule_approved_pins()]
+  → Assign next free time slot (8AM / 12PM / 4PM EST)
+  → Insert into publish_schedule table (status: pending)
+        ↓
+[Cron: every 5 min → run_scheduled_publishes()]
+  → Check publish_schedule WHERE scheduled_time <= now AND status = pending
+        ↓
+[blog_generator.py → generate_blog(pin_id)]
+  → Pick Amazon product with oldest last_used
+  → Call GPT-4o-mini with blog_generation.txt prompt
+  → Fill locked HTML template (Blog-Template.md)
+  → Save to blogs table
+  → Update product last_used
+        ↓
+[wordpress_publisher.py → publish_blog_to_wp(blog_id)]
+  → Upload pin image to WP Media Library (becomes featured image)
+  → POST /wp-json/wp/v2/posts (status: publish)
+  → Save wp_post_id and wp_url to blogs table
+  → Update generated_pins.destination_url = wp_url
+        ↓
+[pinterest_publisher.py → post_pin_to_pinterest(pin_id, wp_url, media_url)]
+  → POST /v5/pins to Pinterest API
+  → Log to posted_pins table
+  → Mark generated_pins.status = published
+        ↓
+[publish_schedule → status: published, completed_at: now]
+```
+
+---
+
+## Scripts
+
+| Script | Purpose |
+|---|---|
+| `execution/content/blog_generator.py` | Generate blog HTML from pin topic |
+| `execution/content/wordpress_publisher.py` | Upload image + publish post to WP |
+| `execution/content/pinterest_publisher.py` | Post pin with blog link to Pinterest |
+| `execution/content/publish_scheduler.py` | Manage time slots and run due publishes |
+| `execution/dashboard.py` | Flask UI for review; triggers scheduling on approve |
+
+---
+
+## Scheduling Logic
+
+- **3 slots per day**: 8:00 AM, 12:00 PM, 4:00 PM US/Eastern
+- **Stored in UTC** in the `publish_schedule` table
+- Slots are assigned sequentially — if today's slots are taken, the next available day is used (up to 7 days ahead)
+- The scheduler checks for due entries every time `run_scheduled_publishes()` is called
+- **Recommended**: Run `run_scheduled_publishes()` on a cron job every 5 minutes
+
+### Running the Scheduler (Windows Task Scheduler or manual)
+```bash
+# From the project root, activate venv first
+cd c:\Users\HP\Documents\automation-EGF
+venv\Scripts\activate
+python -m execution.content.publish_scheduler
+```
+
+---
+
+## Amazon Product Rotation
+
+- Products are stored in `amazon_products` table (seeded from `db.py`)
+- The product with the **oldest `last_used` timestamp** is always selected next
+- After use, `last_used` is updated to the current UTC time
+- With 5 products and ~3 posts/day, each product rotates roughly every 1–2 days
+
+---
+
+## WordPress Setup Required
+
+1. Log into WordPress Admin → Users → Your Profile
+2. Scroll to **Application Passwords**
+3. Enter name "EGF Automation" → click **Add New Application Password**
+4. Copy the generated password into `.env` as `WP_APP_PASSWORD`
+5. Set `WP_USERNAME` to your WordPress username
+
+> **Note:** WordPress must have the REST API enabled (it is by default). Confirm at:
+> `https://easygluten-free.com/wp-json/wp/v2/posts`
+
+---
+
+## Error Handling & Self-Annealing
+
+- If blog generation fails → `publish_schedule.status = failed`, error logged
+- If WP publish fails → status = failed, blog generation is NOT retried (to avoid duplicate blogs)
+- If Pinterest post fails → blog is already live; only the Pinterest step failed
+- **Re-running failed slots**: Manually update `publish_schedule.status = 'pending'` to retry
+- All errors are logged via the standard logger to timestamped log files
+
+---
+
+## Known Constraints
+
+- Pinterest API v5: image must be a publicly accessible URL (we use WP Media Library for this)
+- WP REST API: Application Password auth uses HTTP Basic Auth over HTTPS only
+- GPT-4o-mini structured output: blog_generation prompt must stay under ~4000 tokens for input
+- The HTML template structure is **locked** — do not rename CSS classes or add sections
+
+---
+
+## Learnings / Updates Log
+
+| Date | Learning |
+|---|---|
+| 2026-04-02 | Initial directive created. Full pipeline built end-to-end. |

@@ -187,14 +187,14 @@ def generate_pin_image(dish_name: str, pin_id: int, subtitle: str | None = None)
             image = image.resize((1000, 1500), Image.Resampling.LANCZOS)
 
             # Add brand text overlay
-            image = add_text_overlay(image, title=dish_name, subtitle=subtitle)
+            # image = add_text_overlay(image, title=dish_name, subtitle=subtitle)
 
             # Save
             TMP_PINS_DIR.mkdir(parents=True, exist_ok=True)
             output_path = TMP_PINS_DIR / f"pin_{pin_id}.jpg"
             image.save(output_path, "JPEG", quality=95)
 
-            log_api_cost("google", "imagen-3", 1, 1, "image_generation")
+            log_api_cost("google", "imagen-4.0", 1, 1, "image_generation")
             logger.info(f"Saved pin image → {output_path}")
             return str(output_path)
 

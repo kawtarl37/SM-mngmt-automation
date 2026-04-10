@@ -1,9 +1,4 @@
-import sys
-from pathlib import Path
-
-# Add the project root to sys.path
-BASE_DIR = Path(__file__).resolve().parent.parent
-sys.path.append(str(BASE_DIR))
+# Imports from the execution package
 
 from execution.scrapers.reddit_scraper import run_scraper
 from execution.scrapers.wordpress_crawler import run_crawler
