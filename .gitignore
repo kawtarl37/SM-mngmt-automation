@@ -21,3 +21,10 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Databases & Logs
+*.db
+*.sqlite
+*.sqlite3
+logs/
+execution/execution/logs/

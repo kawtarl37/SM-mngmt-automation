@@ -13,8 +13,17 @@ from execution.config import DB_PATH, TMP_PINS_DIR
 from execution.content.publish_scheduler import schedule_approved_pins, run_scheduled_publishes, execute_single_publish
 from execution.content.generate_custom_content import generate_custom
 
+# DB initialization imports
+from execution.db import init_db, seed_amazon_products
+from execution.database import Base, engine
+
 app = Flask(__name__)
 CORS(app)
+
+# Auto-initialize all databases and tables if they don't exist
+init_db()
+seed_amazon_products()
+Base.metadata.create_all(bind=engine)
 
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
