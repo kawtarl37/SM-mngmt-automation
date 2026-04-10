@@ -5,9 +5,9 @@ from datetime import datetime
 from pathlib import Path
 
 # Base paths
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE_DIR / "execution" / "data"
-LOGS_DIR = BASE_DIR / "execution" / "logs"
+LOGS_DIR = BASE_DIR / "logs"
 TMP_DIR = BASE_DIR / ".tmp"
 
 # Create required directories if they don't exist
