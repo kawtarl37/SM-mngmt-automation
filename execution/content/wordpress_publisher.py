@@ -1,7 +1,8 @@
 import requests
 from pathlib import Path
 from datetime import datetime, timezone
-from execution.config import WP_BASE_URL, WP_USERNAME, WP_APP_PASSWORD
+import time
+from execution.config import WP_BASE_URL, WP_USERNAME, WP_APP_PASSWORD, SANDBOX_MODE
 from execution.db import get_connection
 from execution.utils.logger import setup_logger
 
@@ -26,6 +27,11 @@ def upload_image_to_wp(image_path: str, title: str) -> dict | None:
     if not image_file.exists():
         logger.error(f"Image file not found: {image_path}")
         return None
+
+    if SANDBOX_MODE:
+        logger.info("[SANDBOX] Simulating WP image upload (2s)...")
+        time.sleep(2)
+        return {"media_id": 999123, "media_url": "https://easygluten-free.com/wp-content/uploads/sandbox-image.jpg"}
 
     url = f"{WP_BASE_URL}/wp-json/wp/v2/media"
     headers = {
@@ -107,23 +113,29 @@ def publish_blog_to_wp(blog_id: int) -> dict | None:
     if category_id:
         post_payload["categories"] = [category_id]
 
-    # Create the WP post
-    try:
-        response = requests.post(
-            f"{WP_BASE_URL}/wp-json/wp/v2/posts",
-            json=post_payload,
-            auth=_get_auth(),
-            timeout=30
-        )
-        response.raise_for_status()
-        data = response.json()
-        wp_post_id = data["id"]
-        wp_url = data["link"]
-        logger.info(f"Blog published to WordPress: post_id={wp_post_id}, url={wp_url}")
-
-    except Exception as e:
-        logger.error(f"Failed to create WP post: {e}")
-        return None
+    if SANDBOX_MODE:
+        logger.info("[SANDBOX] Simulating WP blog post creation (2s)...")
+        time.sleep(2)
+        wp_post_id = 999456 + blog_id
+        wp_url = f"https://easygluten-free.com/sandbox-post-{blog_id}"
+        logger.info(f"Blog published to WordPress (Sandbox): post_id={wp_post_id}, url={wp_url}")
+    else:
+        # Create the WP post
+        try:
+            response = requests.post(
+                f"{WP_BASE_URL}/wp-json/wp/v2/posts",
+                json=post_payload,
+                auth=_get_auth(),
+                timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            wp_post_id = data["id"]
+            wp_url = data["link"]
+            logger.info(f"Blog published to WordPress: post_id={wp_post_id}, url={wp_url}")
+        except Exception as e:
+            logger.error(f"Failed to create WP post: {e}")
+            return None
 
     # Update DB: save WP post ID, URL, featured image ID, and mark as published
     now = datetime.now(timezone.utc).isoformat()

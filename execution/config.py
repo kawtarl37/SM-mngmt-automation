@@ -18,6 +18,10 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 PINTEREST_ACCESS_TOKEN = os.getenv("PINTEREST_ACCESS_TOKEN")
 PINTEREST_BOARD_ID = os.getenv("PINTEREST_BOARD_ID")
 
+# Pinterest Sandbox (for API access review demo)
+PINTEREST_SANDBOX_TOKEN = os.getenv("PINTEREST_SANDBOX_TOKEN") or os.getenv("PINTEREST_ACCESS_TOKEN")
+PINTEREST_SANDBOX_BOARD_ID = os.getenv("PINTEREST_SANDBOX_BOARD_ID") or os.getenv("PINTEREST_BOARD_ID")
+
 # Reddit Scraping
 REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "EGF-Automation/1.0 (Contact: user@easygluten-free.com)")
 SUBREDDITS = [
@@ -37,6 +41,7 @@ WP_USERNAME = os.getenv("WP_USERNAME")
 WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD")
 
 # Settings
+SANDBOX_MODE = os.getenv("SANDBOX_MODE", "True").lower() == "true"
 DAILY_PIN_COUNT = 3
 DAILY_IDEA_GENERATION_COUNT = 20
 TEXT_PREFERENCE_MODEL = "gpt-4o-mini"  # Primary model

@@ -130,6 +130,24 @@ def init_db():
             completed_at TIMESTAMP
         )''')
         
+        # Generated recipes (WP Recipe Maker compatible)
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS generated_recipes (
+            recipe_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            title          TEXT NOT NULL,
+            category       TEXT NOT NULL,
+            recipe_json    TEXT NOT NULL,
+            cover_image    TEXT,
+            step_image_1   TEXT,
+            step_image_2   TEXT,
+            step_image_3   TEXT,
+            status         TEXT DEFAULT \'pending\',
+            wp_post_id     INTEGER,
+            wp_url         TEXT,
+            pinterest_id   TEXT,
+            created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
         # API Cost tracking
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS api_usage (

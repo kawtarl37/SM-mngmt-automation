@@ -149,3 +149,51 @@
 {"time": "2026-03-30 11:21:39,032", "level": "INFO", "module": "pin_assembler", "msg": "Pin assembly sequence complete. Pins are now stored in the DB as 'pending' review."}
 {"time": "2026-03-30 11:21:39,032", "level": "INFO", "module": "pipeline_runner", "msg": "\u2705 Daily pipeline execution completed successfully!"}
 {"time": "2026-03-30 11:21:39,033", "level": "INFO", "module": "pipeline_runner", "msg": "Pending pins are now ready for review in the dashboard."}
+{"time": "2026-03-30 12:11:56,826", "level": "INFO", "module": "pipeline_runner", "msg": "\ud83d\ude80 Starting Daily Content Pipeline..."}
+{"time": "2026-03-30 12:11:56,826", "level": "INFO", "module": "pipeline_runner", "msg": "Step 1: Collecting data from Reddit..."}
+{"time": "2026-03-30 12:11:56,826", "level": "INFO", "module": "reddit_scraper", "msg": "Starting Reddit public JSON scraper..."}
+{"time": "2026-03-30 12:11:56,826", "level": "INFO", "module": "reddit_scraper", "msg": "Fetching r/glutenfree..."}
+{"time": "2026-03-30 12:11:59,813", "level": "INFO", "module": "reddit_scraper", "msg": "Saved 41 posts from r/glutenfree"}
+{"time": "2026-03-30 12:11:59,813", "level": "INFO", "module": "reddit_scraper", "msg": "Fetching r/glutenfreebaking..."}
+{"time": "2026-03-30 12:12:02,341", "level": "INFO", "module": "reddit_scraper", "msg": "Saved 3 posts from r/glutenfreebaking"}
+{"time": "2026-03-30 12:12:02,341", "level": "INFO", "module": "reddit_scraper", "msg": "Fetching r/glutenfreecooking..."}
+{"time": "2026-03-30 12:12:04,748", "level": "INFO", "module": "reddit_scraper", "msg": "Saved 4 posts from r/glutenfreecooking"}
+{"time": "2026-03-30 12:12:04,748", "level": "INFO", "module": "reddit_scraper", "msg": "Fetching r/glutenfreerecipes..."}
+{"time": "2026-03-30 12:12:07,286", "level": "INFO", "module": "reddit_scraper", "msg": "Saved 0 posts from r/glutenfreerecipes"}
+{"time": "2026-03-30 12:12:07,286", "level": "INFO", "module": "reddit_scraper", "msg": "Fetching r/celiac..."}
+{"time": "2026-03-30 12:12:10,594", "level": "INFO", "module": "reddit_scraper", "msg": "Saved 29 posts from r/celiac"}
+{"time": "2026-03-30 12:12:10,594", "level": "INFO", "module": "reddit_scraper", "msg": "Reddit scraper completed. Total posts saved: 77"}
+{"time": "2026-03-30 12:12:10,596", "level": "INFO", "module": "pipeline_runner", "msg": "Step 2: Ranking trending topics..."}
+{"time": "2026-03-30 12:12:10,596", "level": "INFO", "module": "trend_analyzer", "msg": "Ranking imported trend topics..."}
+{"time": "2026-03-30 12:12:10,633", "level": "INFO", "module": "trend_analyzer", "msg": "Ranked 78 topics."}
+{"time": "2026-03-30 12:12:10,635", "level": "INFO", "module": "pipeline_runner", "msg": "Step 3: Generating and scoring content ideas..."}
+{"time": "2026-03-30 12:12:10,635", "level": "INFO", "module": "idea_generator", "msg": "Starting idea generation..."}
+{"time": "2026-03-30 12:12:10,816", "level": "INFO", "module": "llm_client", "msg": "Calling gpt-4o-mini for task: idea_generation"}
+{"time": "2026-03-30 12:12:36,129", "level": "INFO", "module": "llm_client", "msg": "LLM call successful. Cost: $0.0008"}
+{"time": "2026-03-30 12:12:36,147", "level": "INFO", "module": "idea_generator", "msg": "Saved 19 new ideas to DB."}
+{"time": "2026-03-30 12:12:36,147", "level": "INFO", "module": "idea_scorer", "msg": "Starting idea scoring and selection..."}
+{"time": "2026-03-30 12:12:36,344", "level": "INFO", "module": "idea_scorer", "msg": "Selected Top 3 ideas for pinning."}
+{"time": "2026-03-30 12:12:36,345", "level": "INFO", "module": "pipeline_runner", "msg": "Step 4: Assembling pins (Captions and Imagen 4.0 images)..."}
+{"time": "2026-03-30 12:12:36,345", "level": "INFO", "module": "pin_assembler", "msg": "Starting pin assembly sequence..."}
+{"time": "2026-03-30 12:12:36,345", "level": "INFO", "module": "caption_generator", "msg": "Starting caption generation for pending pins..."}
+{"time": "2026-03-30 12:12:36,383", "level": "INFO", "module": "caption_generator", "msg": "Generating caption for pin: Gluten-Free Dinner Hacks: 5 Easy Meals Under 30 Minutes"}
+{"time": "2026-03-30 12:12:36,383", "level": "INFO", "module": "llm_client", "msg": "Calling gpt-4o-mini for task: caption_generation"}
+{"time": "2026-03-30 12:12:40,018", "level": "INFO", "module": "llm_client", "msg": "LLM call successful. Cost: $0.0001"}
+{"time": "2026-03-30 12:12:40,018", "level": "INFO", "module": "caption_generator", "msg": "Generating caption for pin: Mix-and-Match Gluten-Free Breakfast Ideas: Bye-Bye Boredom!"}
+{"time": "2026-03-30 12:12:40,018", "level": "INFO", "module": "llm_client", "msg": "Calling gpt-4o-mini for task: caption_generation"}
+{"time": "2026-03-30 12:12:43,090", "level": "INFO", "module": "llm_client", "msg": "LLM call successful. Cost: $0.0001"}
+{"time": "2026-03-30 12:12:43,090", "level": "INFO", "module": "caption_generator", "msg": "Generating caption for pin: One-Pan Gluten-Free Dinners: Easy Cleanup, Big Flavor!"}
+{"time": "2026-03-30 12:12:43,092", "level": "INFO", "module": "llm_client", "msg": "Calling gpt-4o-mini for task: caption_generation"}
+{"time": "2026-03-30 12:12:46,073", "level": "INFO", "module": "llm_client", "msg": "LLM call successful. Cost: $0.0001"}
+{"time": "2026-03-30 12:12:46,091", "level": "INFO", "module": "caption_generator", "msg": "Successfully generated captions for 3 pins."}
+{"time": "2026-03-30 12:12:46,094", "level": "INFO", "module": "image_generator", "msg": "Starting image generation for pending pins..."}
+{"time": "2026-03-30 12:12:46,155", "level": "INFO", "module": "image_generator", "msg": "Generating image for '5 Gluten-Free Dinner Hacks Ready in 30 Minutes' (Attempt 1/3)..."}
+{"time": "2026-03-30 12:12:55,284", "level": "INFO", "module": "image_generator", "msg": "Saved pin image \u2192 C:\\Users\\HP\\Documents\\automation-EGF\\.tmp\\pins\\pin_13.jpg"}
+{"time": "2026-03-30 12:12:55,340", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'Mix-and-Match Gluten-Free Breakfast Ideas to Delight!' (Attempt 1/3)..."}
+{"time": "2026-03-30 12:13:08,438", "level": "INFO", "module": "image_generator", "msg": "Saved pin image \u2192 C:\\Users\\HP\\Documents\\automation-EGF\\.tmp\\pins\\pin_14.jpg"}
+{"time": "2026-03-30 12:13:08,501", "level": "INFO", "module": "image_generator", "msg": "Generating image for 'One-Pan Gluten-Free Dinners: Easy Cleanup & Flavor!' (Attempt 1/3)..."}
+{"time": "2026-03-30 12:13:18,068", "level": "INFO", "module": "image_generator", "msg": "Saved pin image \u2192 C:\\Users\\HP\\Documents\\automation-EGF\\.tmp\\pins\\pin_15.jpg"}
+{"time": "2026-03-30 12:13:18,090", "level": "INFO", "module": "image_generator", "msg": "Successfully generated 3 images."}
+{"time": "2026-03-30 12:13:18,090", "level": "INFO", "module": "pin_assembler", "msg": "Pin assembly sequence complete. Pins are now stored in the DB as 'pending' review."}
+{"time": "2026-03-30 12:13:18,091", "level": "INFO", "module": "pipeline_runner", "msg": "\u2705 Daily pipeline execution completed successfully!"}
+{"time": "2026-03-30 12:13:18,091", "level": "INFO", "module": "pipeline_runner", "msg": "Pending pins are now ready for review in the dashboard."}

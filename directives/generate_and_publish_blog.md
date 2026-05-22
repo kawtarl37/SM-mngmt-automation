@@ -125,8 +125,51 @@ python -m execution.content.publish_scheduler
 
 ---
 
+## Pinterest OAuth 2.0 Setup
+
+Pinterest uses OAuth 2.0 Authorization Code Flow. Tokens must be obtained interactively (user must log in and approve). This is a one-time setup — after that, `token_manager.py` handles refreshes automatically.
+
+### Initial Setup (run once)
+
+**Option A — Via Dashboard (recommended):**
+1. Start the dashboard (`.\start-dashboard.bat`)
+2. Click the **🔑 Re-auth Pinterest** button in the header
+3. A Pinterest login popup opens → log in → click "Give Access"
+4. Tokens are saved to `.env` automatically
+
+**Option B — Standalone script:**
+```bash
+python -m execution.utils.pinterest_oauth
+```
+Opens the auth URL in your browser, catches the callback on port 8888, saves tokens.
+
+### Registered Redirect URIs (must match exactly in Pinterest Developer app)
+- `http://localhost:8888/callback` — used by the standalone script
+- `http://localhost:5000/oauth/callback` — used by the dashboard button
+
+### Token Behavior
+- Access tokens expire after ~1 hour
+- `continuous_refresh=true` was set during first exchange → **refresh tokens rotate** on each use
+- `token_manager.py` auto-refreshes when `pinterest_publisher.py` gets a 401/403
+- Both new `access_token` AND `refresh_token` are written back to `.env` on each refresh
+
+### Trial Access vs Standard Access
+- **Trial Access** (error code 29): Can read boards/pins but CANNOT create pins. Your app starts here.
+- **Standard Access**: Required to post pins. Request at https://developers.pinterest.com/apps/ → your app → Request Standard Access
+- Without Standard Access, no OAuth fix will allow pin posting.
+
+---
+
 ## Learnings / Updates Log
 
 | Date | Learning |
 |---|---|
 | 2026-04-02 | Initial directive created. Full pipeline built end-to-end. |
+| 2026-04-11 | SANDBOX_MODE defaults to True — must set SANDBOX_MODE=False in .env for real posts |
+| 2026-04-11 | Pinterest Trial Access (error code 29) blocks all pin creation — Standard Access required |
+| 2026-04-11 | OAuth tokens obtained without continuous_refresh=true become one-time-use and expire immediately |
+| 2026-04-11 | Dashboard OAuth callback must use port 5000 (dashboard port), not 8888 (standalone script port) |
+| 2026-04-27 | Recipe posts land at `/product/` URLs — this is expected WooCommerce/WPRM behaviour; do NOT change post type. Pinterest pin link must use the `/product/` URL that WP returns in `wp_url`. |
+| 2026-04-27 | Step images now uploaded to WP Media Library and attached to WPRM instruction steps via `image_id`. Recipe generator saves step images to `step_image_1/2/3` columns; publisher reads and uploads all three. |
+| 2026-04-27 | Notes section restructured: `substitutions` field added to model → rendered as HTML `<ul>` under "Substitutions & Variations"; `notes` → "Claire's Gluten-Free Baking Notes"; `tips` → "Tips". Matches live recipe page format. |
+
