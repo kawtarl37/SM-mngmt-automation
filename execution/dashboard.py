@@ -504,6 +504,183 @@ def oauth_status():
     return jsonify({"done": False})
 
 
+# ──────────────────────────────────────────────
+# API: Trend Analysis & Blog Gen
+# ──────────────────────────────────────────────
+
+_TRENDS_SCRAPE_STATUS = {"status": "idle", "error": None}
+_TRENDS_LOCK = threading.Lock()
+
+def _run_trends_scrape_task():
+    global _TRENDS_SCRAPE_STATUS
+    try:
+        from execution.scrapers.reddit_scraper import run_scraper as run_reddit
+        run_reddit()
+        
+        from execution.scrapers.medical_articles_scraper import run_scraper as run_pubmed
+        run_pubmed()
+        
+        from execution.intelligence.trend_analyzer import rank_trends
+        rank_trends()
+        
+        from execution.intelligence.trend_synthesizer import synthesize_trends
+        synthesize_trends()
+        
+        with _TRENDS_LOCK:
+            _TRENDS_SCRAPE_STATUS = {"status": "done", "error": None}
+    except Exception as e:
+        import logging
+        logging.getLogger("dashboard").error(f"Background trends scrape failed: {e}", exc_info=True)
+        with _TRENDS_LOCK:
+            _TRENDS_SCRAPE_STATUS = {"status": "error", "error": str(e)}
+
+@app.route('/api/trends', methods=['GET'])
+def get_trends():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM trendy_topics ORDER BY relevance_score DESC, created_at DESC")
+    trends = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(trends)
+
+@app.route('/api/trends/scrape', methods=['POST'])
+def api_trends_scrape():
+    global _TRENDS_SCRAPE_STATUS
+    with _TRENDS_LOCK:
+        if _TRENDS_SCRAPE_STATUS["status"] == "running":
+            return jsonify({"status": "running", "message": "Scrape already in progress."})
+        _TRENDS_SCRAPE_STATUS = {"status": "running", "error": None}
+    t = threading.Thread(target=_run_trends_scrape_task, daemon=True)
+    t.start()
+    return jsonify({"status": "started"})
+
+@app.route('/api/trends/scrape/status', methods=['GET'])
+def api_trends_scrape_status():
+    with _TRENDS_LOCK:
+        return jsonify(_TRENDS_SCRAPE_STATUS)
+
+@app.route('/api/trends/<int:topic_id>/approve', methods=['POST'])
+def api_trend_approve(topic_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE trendy_topics SET status='approved' WHERE topic_id=?", (topic_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True})
+
+@app.route('/api/trends/<int:topic_id>/reject', methods=['POST'])
+def api_trend_reject(topic_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE trendy_topics SET status='rejected' WHERE topic_id=?", (topic_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True})
+
+@app.route('/api/trends/<int:topic_id>/generate_blog', methods=['POST'])
+def api_trend_generate_blog(topic_id):
+    import datetime
+    from execution.config import PROMPTS_DIR
+    from execution.utils.llm_client import LLMClient
+    from execution.content.image_generator import generate_pin_image
+    from execution.content.blog_generator import generate_blog
+    
+    # 1. Fetch topic
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM trendy_topics WHERE topic_id=?", (topic_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"success": False, "error": "Topic not found"}), 404
+    topic = dict(row)
+    conn.close()
+
+    # 2. Call LLM for caption
+    client = LLMClient()
+    system_prompt = (PROMPTS_DIR / "brand_system_prompt.txt").read_text(encoding="utf-8")
+    user_prompt = f"""
+Create a new Pinterest pin idea and caption for this trendy topic:
+Title: {topic['title']}
+Details: {topic['details']}
+Source: {topic['source']}
+
+Provide:
+1. A catchy, Pinterest-optimized Pin Title (incorporating GF keywords, max 70 chars).
+2. A descriptive Pin Caption / Description (max 160 chars, in Claire's voice, witty and relatable).
+3. A list of 3-5 relevant hashtags.
+4. An alt text description for the image.
+
+Output should match the CaptionGenerationResponse schema.
+"""
+    try:
+        from execution.models import CaptionGenerationResponse
+        caption_resp: CaptionGenerationResponse = client.generate_structured(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_format=CaptionGenerationResponse,
+            task_name="custom_caption"
+        )
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Failed to generate caption: {e}"}), 500
+
+    # 3. Insert Pin as approved
+    try:
+        from execution.database import get_db, GeneratedPin
+        db_generator = get_db()
+        db = next(db_generator)
+        new_pin = GeneratedPin(
+            idea_id=0,
+            title=caption_resp.pin_title,
+            description=caption_resp.pin_description,
+            seo_keywords=", ".join(caption_resp.hashtags),
+            status="approved",
+            batch_date=datetime.date.today(),
+            created_at=datetime.datetime.utcnow()
+        )
+        db.add(new_pin)
+        db.commit()
+        db.refresh(new_pin)
+        pin_id = new_pin.pin_id
+        next(db_generator, None)
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Failed to save pin: {e}"}), 500
+
+    # 4. Generate Pin image
+    try:
+        subtitle = "Tips & Tricks" if "Reddit" in topic['source'] else "Know Your Ingredients"
+        image_path = generate_pin_image(caption_resp.pin_title, pin_id, subtitle=subtitle)
+        if image_path:
+            conn = get_db_connection()
+            conn.execute("UPDATE generated_pins SET image_path=? WHERE pin_id=?", (image_path, pin_id))
+            conn.commit()
+            conn.close()
+    except Exception:
+        pass
+
+    # 5. Generate Blog
+    try:
+        blog_data = generate_blog(pin_id)
+        if not blog_data:
+            return jsonify({"success": False, "error": "Blog generation failed."}), 500
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+    # 6. Schedule approved pin
+    try:
+        schedule_approved_pins()
+    except Exception as e:
+        return jsonify({"success": True, "warning": f"Blog generated but scheduling failed: {e}", "pin_id": pin_id}), 200
+
+    # 7. Update trend status
+    conn = get_db_connection()
+    conn.execute("UPDATE trendy_topics SET status='generated' WHERE topic_id=?", (topic_id,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True, "pin_id": pin_id, "blog_title": blog_data["title"]})
+
+
 @app.route('/api/config')
 def api_config():
     """Return runtime configuration flags to the frontend."""
@@ -733,6 +910,7 @@ def index():
                 <button class="tab-btn active" id="tabnav-pending" onclick="showTab('tab-pending',this)">Pending Review</button>
                 <button class="tab-btn" id="tabnav-queue" onclick="showTab('tab-queue',this)">Publish Queue</button>
                 <button class="tab-btn" id="tabnav-recipes" onclick="showTab('tab-recipes',this)">🍽️ Recipes</button>
+                <button class="tab-btn" id="tabnav-trends" onclick="showTab('tab-trends',this)">🔥 Trends &amp; Blog Gen</button>
             </nav>
         </header>
 
@@ -785,6 +963,48 @@ def index():
                 </div>
                 <div id="recipes-approved-container" class="recipes-grid"><div class="empty">No approved recipes yet.</div></div>
             </div>
+
+            <!-- TRENDS TAB -->
+            <div id="tab-trends" class="tab-content">
+                <div class="section-header">
+                    <p class="section-title">Trendy Topics Discovered (AI &amp; PubMed)</p>
+                    <button class="btn btn-trigger" id="btn-scrape-trends" onclick="scrapeAndSynthesizeTrends()">
+                        <span class="spinner"></span>↻ Scrape &amp; Synthesize Trends
+                    </button>
+                </div>
+                
+                <!-- Pending Trends Section -->
+                <div style="margin-bottom: 24px;">
+                    <h3 style="font-size: 1.1rem; color: #1a1a2e; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                        🔥 Discovered Trends (Pending Review)
+                    </h3>
+                    <div id="trends-pending-container" class="pins-grid">
+                        <div class="empty">Click "Scrape &amp; Synthesize Trends" to fetch and learn the latest trends.</div>
+                    </div>
+                </div>
+
+                <!-- Approved Trends Section -->
+                <div class="section-divider" style="margin-top: 36px;">
+                    <h3>✅ Approved Topics &amp; Blog Queue</h3>
+                    <p>Generate a complete WordPress blog + Pinterest Pin package directly from these topics.</p>
+                </div>
+                
+                <table class="schedule-table" style="margin-top: 14px;">
+                    <thead>
+                        <tr>
+                            <th style="width: 250px;">Topic Title</th>
+                            <th style="width: 150px;">Source</th>
+                            <th>Details &amp; AI Learnings</th>
+                            <th style="width: 180px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trends-approved-body">
+                        <tr>
+                            <td colspan="4" style="text-align:center;padding:28px;color:#aaa">No approved topics yet. Approve a discovered trend above.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
         </main>
 
         <!-- Generate Content Modal -->
@@ -829,6 +1049,7 @@ def index():
             el.classList.add('active');
             if (id === 'tab-queue') fetchSchedule();
             else if (id === 'tab-recipes') fetchRecipes();
+            else if (id === 'tab-trends') fetchTrends();
             else fetchPins();
         }
 
@@ -1199,6 +1420,153 @@ def index():
                 if (data.auth_url) window.open(data.auth_url,'_blank','width=600,height=700');
                 else alert('Error: '+(data.error||'Unknown'));
             } catch(e) { alert('Error: '+e); }
+        }
+
+        // ── Trends & Insights ──
+        async function fetchTrends() {
+            try {
+                const res = await fetch('/api/trends');
+                const trends = await res.json();
+                
+                const pending = trends.filter(t => t.status === 'pending');
+                const approved = trends.filter(t => t.status === 'approved');
+                
+                renderPendingTrends(pending);
+                renderApprovedTrends(approved);
+            } catch(e) {
+                console.error("Error fetching trends:", e);
+            }
+        }
+        
+        function renderPendingTrends(trends) {
+            const container = document.getElementById('trends-pending-container');
+            if (!trends.length) {
+                container.innerHTML = '<div class="empty">🎉 All caught up! No pending trends. Click "Scrape & Synthesize Trends" above to discover new ones.</div>';
+                return;
+            }
+            container.innerHTML = trends.map(t => {
+                const isPubMed = t.source.toLowerCase().includes('pubmed');
+                const badgeColor = isPubMed ? 'background:#e8f4fd;color:#1565c0;border:1px solid #bbdefb;' : 'background:#fde8e8;color:#c0392b;border:1px solid #ffcdd2;';
+                const scoreColor = t.relevance_score >= 0.8 ? 'color:#27ae60' : t.relevance_score >= 0.5 ? 'color:#e67e22' : 'color:#555';
+                
+                return `<div class="pin-card" id="trend-card-${t.topic_id}" style="padding:18px;min-height:220px;display:flex;flex-direction:column;justify-content:space-between;">
+                    <div style="flex-grow:1;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                            <span class="pin-badge" style="${badgeColor}">${t.source}</span>
+                            <span style="font-size:0.75rem;font-weight:700;${scoreColor}">★ ${t.relevance_score.toFixed(2)} Relevance</span>
+                        </div>
+                        <h4 style="font-size:0.95rem;font-weight:700;margin-bottom:8px;color:#1a1a2e;">${t.title}</h4>
+                        <p style="font-size:0.8rem;color:#555;line-height:1.55;margin-bottom:12px;">${t.details}</p>
+                    </div>
+                    <div class="pin-actions" style="border-top:1px solid #f0f0f0;padding-top:10px;margin-top:10px;display:flex;gap:8px;">
+                        <button class="btn btn-approve" onclick="approveTrend(${t.topic_id})">✓ Approve</button>
+                        <button class="btn btn-reject" onclick="rejectTrend(${t.topic_id})">✗ Reject</button>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+        
+        function renderApprovedTrends(trends) {
+            const tbody = document.getElementById('trends-approved-body');
+            if (!trends.length) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:28px;color:#aaa">No approved topics yet. Approve a discovered trend above.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = trends.map(t => {
+                const isPubMed = t.source.toLowerCase().includes('pubmed');
+                const badgeColor = isPubMed ? 'background:#e8f4fd;color:#1565c0;border:1px solid #bbdefb;' : 'background:#fde8e8;color:#c0392b;border:1px solid #ffcdd2;';
+                
+                return `<tr id="trend-row-${t.topic_id}">
+                    <td style="font-weight:700;color:#1a1a2e;vertical-align:top;padding-top:14px;">${t.title}</td>
+                    <td style="vertical-align:top;padding-top:14px;"><span class="pin-badge" style="${badgeColor}">${t.source}</span></td>
+                    <td style="color:#555;line-height:1.5;font-size:0.8rem;vertical-align:top;padding-top:14px;">${t.details}</td>
+                    <td style="vertical-align:top;padding-top:10px;">
+                        <button class="btn btn-approve" onclick="generateBlogFromTrend(${t.topic_id}, this)" style="padding:6px 12px;font-size:0.78rem;background:linear-gradient(135deg,#e94560,#c73652);display:flex;align-items:center;justify-content:center;gap:4px;width:100%;">
+                            <span class="spinner"></span>✍️ Generate Blog &amp; Pin
+                        </button>
+                    </td>
+                </tr>`;
+            }).join('');
+        }
+
+        async function approveTrend(id) {
+            try {
+                const res = await fetch(`/api/trends/${id}/approve`, {method:'POST'});
+                const data = await res.json();
+                if (data.success) {
+                    fetchTrends();
+                }
+            } catch(e) { alert("Error approving trend: " + e); }
+        }
+
+        async function rejectTrend(id) {
+            if (!confirm('Reject and dismiss this trendy topic?')) return;
+            try {
+                const res = await fetch(`/api/trends/${id}/reject`, {method:'POST'});
+                const data = await res.json();
+                if (data.success) {
+                    fetchTrends();
+                }
+            } catch(e) { alert("Error rejecting trend: " + e); }
+        }
+
+        async function generateBlogFromTrend(id, btn) {
+            if (!confirm('Generate a complete Blog Post and Pinterest Pin for this topic? It will be automatically scheduled in the publish queue.')) return;
+            btn.classList.add('loading'); btn.disabled = true;
+            try {
+                const res = await fetch(`/api/trends/${id}/generate_blog`, {method:'POST'});
+                const data = await res.json();
+                if (data.success) {
+                    alert(`Success! Blog generated: "${data.blog_title}".\nIt has been added to the Publish Queue.`);
+                    fetchTrends();
+                } else {
+                    alert("Failed: " + data.error);
+                    btn.classList.remove('loading'); btn.disabled = false;
+                }
+            } catch(e) { 
+                alert("Error generating blog: " + e); 
+                btn.classList.remove('loading'); btn.disabled = false;
+            }
+        }
+
+        let _trendsScrapePollInterval = null;
+        async function scrapeAndSynthesizeTrends() {
+            const btn = document.getElementById('btn-scrape-trends');
+            btn.classList.add('loading'); btn.disabled = true;
+            try {
+                const res = await fetch('/api/trends/scrape', {method:'POST'});
+                const data = await res.json();
+                if (data.status === 'started' || data.status === 'running') {
+                    _trendsScrapePollInterval = setInterval(pollScrapeStatus, 2000);
+                } else {
+                    alert("Could not start scraping: " + data.message);
+                    btn.classList.remove('loading'); btn.disabled = false;
+                }
+            } catch(e) {
+                alert("Error starting scrape: " + e);
+                btn.classList.remove('loading'); btn.disabled = false;
+            }
+        }
+
+        async function pollScrapeStatus() {
+            try {
+                const res = await fetch('/api/trends/scrape/status');
+                const data = await res.json();
+                if (data.status === 'running') return;
+                
+                clearInterval(_trendsScrapePollInterval);
+                const btn = document.getElementById('btn-scrape-trends');
+                btn.classList.remove('loading'); btn.disabled = false;
+                
+                if (data.status === 'done') {
+                    alert("Successfully scraped new subreddits/medical articles and synthesized trendy topics!");
+                    fetchTrends();
+                } else if (data.status === 'error') {
+                    alert("Scraping failed: " + data.error);
+                }
+            } catch(e) {
+                console.error("Error polling scrape status:", e);
+            }
         }
 
         // Initial load

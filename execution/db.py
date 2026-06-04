@@ -161,6 +161,18 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
         
+        # Discovered trendy topics (AI synthesized/medical articles)
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trendy_topics (
+            topic_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            details TEXT NOT NULL,
+            source TEXT NOT NULL,
+            relevance_score REAL DEFAULT 0.0,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
         conn.commit()
 
 

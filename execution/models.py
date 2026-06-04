@@ -136,3 +136,16 @@ class RecipeGenerationResponse(BaseModel):
     cover_image_prompt: str = Field(description="Imagen 4 prompt for the hero/cover image. Overhead or 45-degree beauty shot of the finished dish in 'The Sunday Light Kitchen'. Warm, natural lighting. Food-focused. Realistic GF textures. No text in image. Vertical 9:16 ratio composition.")
     pinterest_description: str = Field(description="160-char max Pinterest pin description. Mentions GF, the dish, a benefit, and a CTA. Brand voice.")
 
+# =======================
+# Trend Synthesis Models
+# =======================
+
+class TrendyTopicItem(BaseModel):
+    title: str = Field(description="Catchy title of the trend (e.g. 'Air Fryer Gluten Contamination')")
+    details: str = Field(description="A 3-5 sentence explanation of what people are discussing or what the study found, written in brand voice.")
+    source: str = Field(description="Source of the trend, e.g. 'Reddit (r/celiac)' or 'PubMed (Nutrients)'")
+    relevance_score: float = Field(description="Estimated relevance to EGF readers between 0.0 and 1.0")
+
+class TrendyTopicResponse(BaseModel):
+    topics: List[TrendyTopicItem]
+
