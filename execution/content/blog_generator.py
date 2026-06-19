@@ -107,7 +107,7 @@ def fill_template(template: str, content: BlogGenerationResponse, product: dict)
 # Main entrypoint
 # ──────────────────────────────────────────────
 
-def generate_blog(pin_id: int) -> dict | None:
+def generate_blog(pin_id: int, forced_title: str | None = None) -> dict | None:
     """
     Generate a complete blog HTML from an approved pin.
     
@@ -161,6 +161,12 @@ def generate_blog(pin_id: int) -> dict | None:
         product_title=product["title"],
         product_description=product["description"],
     )
+    if forced_title:
+        user_prompt += (
+            "\n\nLOCKED BLOG TITLE:\n"
+            f"{forced_title}\n\n"
+            "Use this exact text for `main_title`. Do not rewrite, expand, shorten, or retitle it."
+        )
 
     # 4. Call LLM
     client = LLMClient()
@@ -171,6 +177,8 @@ def generate_blog(pin_id: int) -> dict | None:
             response_format=BlogGenerationResponse,
             task_name="blog_generation"
         )
+        if forced_title:
+            content.main_title = forced_title
     except Exception as e:
         logger.error(f"LLM call failed for blog generation: {e}")
         return None

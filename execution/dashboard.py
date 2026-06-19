@@ -6,8 +6,11 @@ import base64
 import secrets
 import sqlite3
 import threading
+import re
+import zipfile
 import requests as http_requests
-from flask import Flask, jsonify, request, send_from_directory, redirect
+from io import BytesIO
+from flask import Flask, jsonify, request, send_from_directory, redirect, send_file
 from flask_cors import CORS
 from pathlib import Path
 from dotenv import set_key
@@ -20,7 +23,7 @@ from execution.config import DB_PATH, TMP_PINS_DIR, SANDBOX_MODE
 from execution.content.publish_scheduler import schedule_approved_pins, run_scheduled_publishes, execute_single_publish
 from execution.content.generate_custom_content import generate_custom
 from execution.content.recipe_generator import generate_recipe
-from execution.content.recipe_wp_publisher import publish_recipe_to_wp
+from execution.content.recipe_wp_publisher import build_wprm_import_payload, publish_recipe_to_wp
 from execution.content.pinterest_publisher import post_pin_to_pinterest
 
 # ── Async recipe generation task store ──────────────────────────────────────
@@ -44,6 +47,21 @@ def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _safe_download_name(value: str, fallback: str = "recipe") -> str:
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip("-._")
+    return name[:80] or fallback
+
+
+def _get_recipe_row(recipe_id: int) -> dict | None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM generated_recipes WHERE recipe_id=?", (recipe_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 # ──────────────────────────────────────────────
 # API: Pins
@@ -234,6 +252,63 @@ def api_recipe_reject(recipe_id):
     conn.commit()
     conn.close()
     return jsonify({"success": True})
+
+
+@app.route('/api/recipe/<int:recipe_id>/download/images', methods=['GET'])
+def api_recipe_download_images(recipe_id):
+    """Download the generated cover + step images for a recipe as a zip file."""
+    row = _get_recipe_row(recipe_id)
+    if not row:
+        return jsonify({"success": False, "error": "Recipe not found"}), 404
+
+    try:
+        recipe_data = json.loads(row["recipe_json"])
+    except Exception:
+        recipe_data = {"title": row.get("title") or f"recipe-{recipe_id}"}
+
+    image_fields = [
+        ("cover", row.get("cover_image")),
+        ("step-1", row.get("step_image_1")),
+        ("step-2", row.get("step_image_2")),
+        ("step-3", row.get("step_image_3")),
+    ]
+
+    buffer = BytesIO()
+    added = 0
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for label, image_path in image_fields:
+            if not image_path:
+                continue
+            path = Path(image_path)
+            if not path.exists() or not path.is_file():
+                continue
+            zf.write(path, arcname=f"{label}{path.suffix.lower() or '.jpg'}")
+            added += 1
+
+    if added == 0:
+        return jsonify({"success": False, "error": "No generated image files found for this recipe."}), 404
+
+    buffer.seek(0)
+    filename = f"recipe-{recipe_id}-{_safe_download_name(recipe_data.get('title', row.get('title', 'recipe')))}-images.zip"
+    return send_file(buffer, as_attachment=True, download_name=filename, mimetype="application/zip")
+
+
+@app.route('/api/recipe/<int:recipe_id>/download/wprm-json', methods=['GET'])
+def api_recipe_download_wprm_json(recipe_id):
+    """Download a WP Recipe Maker REST JSON payload for a generated recipe."""
+    row = _get_recipe_row(recipe_id)
+    if not row:
+        return jsonify({"success": False, "error": "Recipe not found"}), 404
+
+    try:
+        recipe_data = json.loads(row["recipe_json"])
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Recipe JSON is invalid: {e}"}), 500
+
+    payload = build_wprm_import_payload(recipe_data)
+    buffer = BytesIO(json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8"))
+    filename = f"recipe-{recipe_id}-{_safe_download_name(recipe_data.get('title', row.get('title', 'recipe')))}-wprm.json"
+    return send_file(buffer, as_attachment=True, download_name=filename, mimetype="application/json")
 
 
 @app.route('/api/recipe/<int:recipe_id>/publish/wp', methods=['POST'])
@@ -577,6 +652,57 @@ def api_trend_reject(topic_id):
     conn.close()
     return jsonify({"success": True})
 
+@app.route('/api/trends/<int:topic_id>/suggest_title', methods=['POST'])
+def api_trend_suggest_title(topic_id):
+    """Suggest and apply one alternate title for a trendy topic."""
+    from execution.config import PROMPTS_DIR
+    from execution.models import BlogTitleSuggestionResponse
+    from execution.utils.llm_client import LLMClient
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM trendy_topics WHERE topic_id=?", (topic_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"success": False, "error": "Topic not found"}), 404
+    topic = dict(row)
+    conn.close()
+
+    try:
+        system_prompt = (PROMPTS_DIR / "brand_system_prompt.txt").read_text(encoding="utf-8")
+        user_prompt = f"""
+Suggest ONE alternate blog title for this approved Easy Gluten Free trend.
+
+Current title: {topic['title']}
+Details: {topic['details']}
+Source: {topic['source']}
+
+Rules:
+- Return one title only in the structured schema.
+- Keep it factual and aligned with the topic details.
+- Keep it SEO-friendly and natural for gluten-free readers.
+- Do not use generic phrases like "ultimate guide" or "game changer".
+- Do not use emojis.
+"""
+        response: BlogTitleSuggestionResponse = LLMClient().generate_structured(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_format=BlogTitleSuggestionResponse,
+            task_name="trend_title_suggestion",
+        )
+        new_title = response.title.strip()
+        if not new_title:
+            return jsonify({"success": False, "error": "Title suggestion was empty."}), 500
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Failed to suggest title: {e}"}), 500
+
+    conn = get_db_connection()
+    conn.execute("UPDATE trendy_topics SET title=? WHERE topic_id=?", (new_title, topic_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "title": new_title})
+
 @app.route('/api/trends/<int:topic_id>/generate_blog', methods=['POST'])
 def api_trend_generate_blog(topic_id):
     import datetime
@@ -631,7 +757,7 @@ Output should match the CaptionGenerationResponse schema.
         db = next(db_generator)
         new_pin = GeneratedPin(
             idea_id=0,
-            title=caption_resp.pin_title,
+            title=topic["title"],
             description=caption_resp.pin_description,
             seo_keywords=", ".join(caption_resp.hashtags),
             status="approved",
@@ -649,7 +775,7 @@ Output should match the CaptionGenerationResponse schema.
     # 4. Generate Pin image
     try:
         subtitle = "Tips & Tricks" if "Reddit" in topic['source'] else "Know Your Ingredients"
-        image_path = generate_pin_image(caption_resp.pin_title, pin_id, subtitle=subtitle)
+        image_path = generate_pin_image(topic["title"], pin_id, subtitle=subtitle)
         if image_path:
             conn = get_db_connection()
             conn.execute("UPDATE generated_pins SET image_path=? WHERE pin_id=?", (image_path, pin_id))
@@ -660,7 +786,7 @@ Output should match the CaptionGenerationResponse schema.
 
     # 5. Generate Blog
     try:
-        blog_data = generate_blog(pin_id)
+        blog_data = generate_blog(pin_id, forced_title=topic["title"])
         if not blog_data:
             return jsonify({"success": False, "error": "Blog generation failed."}), 500
     except Exception as e:
@@ -880,6 +1006,10 @@ def index():
             .btn-recipe-wp:hover{opacity:.88}
             .btn-recipe-pin{background:linear-gradient(135deg,#e60023,#c0001e);color:white;padding:9px 18px;border:none;border-radius:8px;cursor:pointer;font-weight:700;font-size:.85rem;font-family:inherit;transition:opacity .2s;display:flex;align-items:center;gap:6px}
             .btn-recipe-pin:hover{opacity:.88}
+            .btn-recipe-download{background:#eef2f7;color:#1f2937;padding:9px 14px;border:none;border-radius:8px;cursor:pointer;font-weight:700;font-size:.85rem;font-family:inherit;transition:opacity .2s;display:flex;align-items:center;gap:6px}
+            .btn-recipe-download:hover{opacity:.82}
+            .btn-recipe-json{background:#fff3cd;color:#7a4b00;padding:9px 14px;border:none;border-radius:8px;cursor:pointer;font-weight:700;font-size:.85rem;font-family:inherit;transition:opacity .2s;display:flex;align-items:center;gap:6px}
+            .btn-recipe-json:hover{opacity:.82}
             button:disabled{opacity:.45;cursor:not-allowed!important}
 
             /* ── Approved section divider ── */
@@ -1293,6 +1423,9 @@ def index():
 
             // Action buttons
             let actionBtns = '';
+            const exportBtns = `
+                <button class="btn-recipe-download" onclick="downloadRecipeImages(${r.recipe_id})">Download Images</button>
+                <button class="btn-recipe-json" onclick="downloadRecipeJson(${r.recipe_id})">WPRM JSON</button>`;
             if (showApproveReject) {
                 actionBtns = `
                     <button class="btn-recipe-approve" onclick="approveRecipe(${r.recipe_id},this)">✓ Accept</button>
@@ -1308,6 +1441,7 @@ def index():
                     <button class="btn-recipe-wp"  id="wp-btn-${r.recipe_id}"  onclick="publishRecipeWP(${r.recipe_id},this)"  ${wpDisabled}><span class="spinner"></span>${wpLabel}</button>
                     <button class="btn-recipe-pin" id="pin-btn-${r.recipe_id}" onclick="publishRecipePinterest(${r.recipe_id},this)" ${pinDisabled} style="${pinStyle}"><span class="spinner"></span>${pinLabel}</button>`;
             }
+            actionBtns += exportBtns;
 
             return `<div class="recipe-card" id="recipe-${r.recipe_id}">
                 <div class="recipe-card-top">
@@ -1360,6 +1494,14 @@ def index():
             card.querySelectorAll('.recipe-tab-content').forEach(c => c.classList.remove('active'));
             el.classList.add('active');
             document.getElementById(`rtab-${id}-${tab}`).classList.add('active');
+        }
+
+        function downloadRecipeImages(id) {
+            window.location.href = `/api/recipe/${id}/download/images`;
+        }
+
+        function downloadRecipeJson(id) {
+            window.location.href = `/api/recipe/${id}/download/wprm-json`;
         }
 
         async function approveRecipe(id, btn) {
@@ -1481,6 +1623,9 @@ def index():
                     <td style="vertical-align:top;padding-top:14px;"><span class="pin-badge" style="${badgeColor}">${t.source}</span></td>
                     <td style="color:#555;line-height:1.5;font-size:0.8rem;vertical-align:top;padding-top:14px;">${t.details}</td>
                     <td style="vertical-align:top;padding-top:10px;">
+                        <button class="btn btn-trigger" onclick="suggestTrendTitle(${t.topic_id}, this)" style="padding:6px 12px;font-size:0.78rem;margin-bottom:6px;width:100%;">
+                            Suggest Another Title
+                        </button>
                         <button class="btn btn-approve" onclick="generateBlogFromTrend(${t.topic_id}, this)" style="padding:6px 12px;font-size:0.78rem;background:linear-gradient(135deg,#e94560,#c73652);display:flex;align-items:center;justify-content:center;gap:4px;width:100%;">
                             <span class="spinner"></span>✍️ Generate Blog &amp; Pin
                         </button>
@@ -1508,6 +1653,28 @@ def index():
                     fetchTrends();
                 }
             } catch(e) { alert("Error rejecting trend: " + e); }
+        }
+
+        async function suggestTrendTitle(id, btn) {
+            if (!confirm('Suggest and replace this approved topic title?')) return;
+            const original = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Suggesting...';
+            try {
+                const res = await fetch(`/api/trends/${id}/suggest_title`, {method:'POST'});
+                const data = await res.json();
+                if (data.success) {
+                    fetchTrends();
+                } else {
+                    alert("Failed: " + data.error);
+                    btn.disabled = false;
+                    btn.textContent = original;
+                }
+            } catch(e) {
+                alert("Error suggesting title: " + e);
+                btn.disabled = false;
+                btn.textContent = original;
+            }
         }
 
         async function generateBlogFromTrend(id, btn) {

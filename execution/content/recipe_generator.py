@@ -103,7 +103,7 @@ def generate_recipe() -> dict | None:
     Full pipeline:
       1. Load prompts
       2. Call LLM → RecipeGenerationResponse
-      3. Generate 1 cover + 3 step images via Imagen 4
+      3. Generate 1 cover + 3 step images via the configured image provider
       4. Save to DB
       5. Return recipe dict
 

@@ -31,7 +31,7 @@ def run_full_pipeline():
         score_and_select_ideas()
 
         # 4. Assemble pins (Captions + Images)
-        logger.info("Step 4: Assembling pins (Captions and Imagen 4.0 images)...")
+        logger.info("Step 4: Assembling pins (captions and configured image generation)...")
         assemble_pins()
 
         logger.info("✅ Daily pipeline execution completed successfully!")

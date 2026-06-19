@@ -53,8 +53,14 @@ INSTRUCTIONS FORMAT
 - Include visual cues ("until golden at edges", "batter should be thick like pancake batter")
 - Each step needs an image_prompt for a realistic step photo in The Sunday Light Kitchen
 
+NUTRITION FORMAT
+- Include kcal_per_serving as an integer.
+- Estimate calories from the full ingredient list and divide by servings.
+- Round to the nearest whole kcal.
+- Keep it realistic and conservative; this is an estimate, not medical nutrition advice.
+
 ═══════════════════════════════════════
-IMAGE PROMPTS (for Imagen 4)
+IMAGE PROMPTS (for the configured image provider)
 ═══════════════════════════════════════
 Setting: "The Sunday Light Kitchen" — sage green cabinets, cream stone countertops, wooden open shelves, copper cookware, warm diffused natural window light.
 

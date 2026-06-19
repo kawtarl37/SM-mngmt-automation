@@ -15,6 +15,7 @@ import json
 import time
 import sqlite3
 import requests
+from html import escape
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,6 +27,171 @@ logger = setup_logger("recipe_wp_publisher")
 
 def _auth() -> tuple:
     return (WP_USERNAME, WP_APP_PASSWORD)
+
+
+def _to_float_amount(value: object) -> float | None:
+    """Parse common recipe quantities such as 1, 1/2, or 1 1/2."""
+    if value is None:
+        return None
+
+    text = str(value).strip().lower()
+    if not text:
+        return None
+
+    text = text.replace("about ", "").replace("approx. ", "").replace("approximately ", "")
+    text = text.split("-")[0].strip()
+    if not text:
+        return None
+
+    total = 0.0
+    parsed_any = False
+    for part in text.split():
+        try:
+            if "/" in part:
+                numerator, denominator = part.split("/", 1)
+                total += float(numerator) / float(denominator)
+            else:
+                total += float(part)
+            parsed_any = True
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+
+    return total if parsed_any else None
+
+
+def _estimate_ingredient_kcal(ingredient: dict) -> float:
+    """Return a rough calorie estimate for common generated recipe ingredients."""
+    amount = _to_float_amount(ingredient.get("amount"))
+    if amount is None:
+        return 0.0
+
+    unit = str(ingredient.get("unit", "")).strip().lower()
+    name = str(ingredient.get("name", "")).strip().lower()
+    notes = str(ingredient.get("notes", "")).strip().lower()
+    full_text = f"{name} {notes}"
+
+    def per_unit(values: dict[str, float]) -> float:
+        normalized_unit = unit.rstrip("s")
+        return amount * values.get(normalized_unit, values.get("", 0.0))
+
+    if "olive oil" in full_text or full_text.endswith(" oil") or " avocado oil" in full_text:
+        return per_unit({"tbsp": 119, "tablespoon": 119, "tsp": 40, "teaspoon": 40, "cup": 1909})
+    if "butter" in full_text:
+        return per_unit({"tbsp": 102, "tablespoon": 102, "tsp": 34, "teaspoon": 34, "cup": 1628})
+    if "sugar" in full_text or "maple syrup" in full_text or "honey" in full_text:
+        return per_unit({"cup": 774, "tbsp": 49, "tablespoon": 49, "tsp": 16, "teaspoon": 16})
+    if "flour" in full_text:
+        return per_unit({"cup": 455, "tbsp": 28, "tablespoon": 28})
+    if "rice" in full_text:
+        return per_unit({"cup": 640})
+    if "quinoa" in full_text:
+        return per_unit({"cup": 222})
+    if "oat" in full_text:
+        return per_unit({"cup": 307})
+    if "parmesan" in full_text:
+        return per_unit({"cup": 431, "tbsp": 22, "tablespoon": 22, "oz": 122})
+    if "cheddar" in full_text or "mozzarella" in full_text or "cheese" in full_text:
+        return per_unit({"cup": 400, "oz": 110, "tbsp": 25, "tablespoon": 25})
+    if "heavy cream" in full_text:
+        return per_unit({"cup": 821, "tbsp": 51, "tablespoon": 51})
+    if "coconut cream" in full_text:
+        return per_unit({"cup": 792, "tbsp": 50, "tablespoon": 50})
+    if "coconut milk" in full_text:
+        return per_unit({"cup": 445, "tbsp": 28, "tablespoon": 28})
+    if "milk" in full_text:
+        return per_unit({"cup": 149})
+    if "egg" in full_text:
+        return per_unit({"": 72, "large": 72})
+    if "onion" in full_text:
+        return per_unit({"": 44, "medium": 44, "large": 60, "small": 30, "cup": 64})
+    if "garlic" in full_text:
+        return per_unit({"clove": 4, "": 4, "tsp": 4, "teaspoon": 4})
+    if "tomato" in full_text:
+        return per_unit({"can": 50, "medium": 22, "cup": 32})
+    if "zucchini" in full_text:
+        return per_unit({"medium": 33, "cup": 20, "": 33})
+    if "sweet potato" in full_text:
+        return per_unit({"medium": 112, "cup": 180, "lb": 390, "oz": 24})
+    if "potato" in full_text:
+        return per_unit({"medium": 161, "cup": 136, "lb": 350, "oz": 22})
+    if "chicken" in full_text:
+        return per_unit({"lb": 748, "oz": 47, "cup": 335})
+    if "beef" in full_text:
+        return per_unit({"lb": 1000, "oz": 63, "cup": 339})
+    if "bean" in full_text or "chickpea" in full_text:
+        return per_unit({"can": 350, "cup": 225})
+    if "lentil" in full_text:
+        return per_unit({"cup": 230})
+    if "broth" in full_text or "stock" in full_text:
+        return per_unit({"cup": 15})
+    if "basil" in full_text or "spinach" in full_text or "herb" in full_text:
+        return per_unit({"cup": 7})
+
+    return 0.0
+
+
+def _get_kcal_per_serving(recipe_data: dict) -> int | None:
+    """Use generated nutrition first; otherwise estimate from common ingredients."""
+    for key in ("kcal_per_serving", "calories_per_serving", "calories"):
+        value = recipe_data.get(key)
+        try:
+            if value is not None and int(value) > 0:
+                return int(value)
+        except (TypeError, ValueError):
+            continue
+
+    total_kcal = sum(_estimate_ingredient_kcal(ing) for ing in recipe_data.get("ingredients", []))
+    servings = recipe_data.get("servings") or 1
+    try:
+        servings_count = max(float(servings), 1.0)
+    except (TypeError, ValueError):
+        servings_count = 1.0
+
+    if total_kcal <= 0:
+        return None
+    return max(1, round(total_kcal / servings_count))
+
+
+def _build_nutrition_html(recipe_data: dict) -> str:
+    kcal = _get_kcal_per_serving(recipe_data)
+    if not kcal:
+        return ""
+
+    return (
+        "<h2>Nutrition Facts</h2>\n"
+        "<ul class=\"egf-nutrition-facts\">\n"
+        f"<li><strong>Calories:</strong> about {kcal} kcal per serving</li>\n"
+        "</ul>"
+    )
+
+
+def _build_step_instructions_html(recipe_data: dict, step_media_results: list[dict | None]) -> str:
+    instructions = recipe_data.get("instructions", [])
+    if not instructions:
+        return ""
+
+    title = recipe_data.get("title", "Recipe")
+    parts = ["<h2>Step-by-Step Instructions</h2>", "<ol class=\"egf-step-instructions\">"]
+
+    for i, instruction in enumerate(instructions):
+        text = escape(str(instruction.get("text", "")))
+        parts.append(f"<li><p>{text}</p>")
+
+        media = step_media_results[i] if i < len(step_media_results) else None
+        media_url = media.get("media_url") if media else None
+        if media_url:
+            step_number = instruction.get("step_number") or i + 1
+            alt = escape(f"{title} step {step_number}")
+            parts.append(
+                "<figure class=\"wp-block-image size-large egf-step-image\">"
+                f"<img src=\"{escape(media_url, quote=True)}\" alt=\"{alt}\" loading=\"lazy\" />"
+                "</figure>"
+            )
+
+        parts.append("</li>")
+
+    parts.append("</ol>")
+    return "\n".join(parts)
 
 
 # ─────────────────────────────────────────────
@@ -171,6 +337,19 @@ def _build_wprm_payload(
     return payload
 
 
+def build_wprm_import_payload(
+    recipe_data: dict,
+    cover_media_id: int | None = None,
+    step_media_ids: list[int | None] | None = None,
+) -> dict:
+    """Build a JSON payload suitable for creating a WPRM recipe via WP REST."""
+    return {
+        "title": recipe_data["title"],
+        "status": "publish",
+        "recipe": _build_wprm_payload(recipe_data, cover_media_id, step_media_ids),
+    }
+
+
 def _create_wprm_recipe(
     recipe_data: dict,
     cover_media_id: int | None,
@@ -190,11 +369,11 @@ def _create_wprm_recipe(
         time.sleep(1)
         return 888001
 
-    payload = _build_wprm_payload(recipe_data, cover_media_id, step_media_ids)
+    payload = build_wprm_import_payload(recipe_data, cover_media_id, step_media_ids)
     try:
         resp = requests.post(
             f"{WP_BASE_URL}/wp-json/wp/v2/wprm_recipe",
-            json={"title": recipe_data["title"], "status": "publish", "recipe": payload},
+            json=payload,
             auth=_auth(),
             timeout=30,
         )
@@ -213,24 +392,36 @@ def _create_wprm_recipe(
 # Step 3: Create WP Blog Post with WPRM shortcode
 # ─────────────────────────────────────────────
 
-def _create_wp_post(recipe_data: dict, wprm_recipe_id: int,
-                    cover_media_id: int | None) -> dict | None:
+def _create_wp_post(
+    recipe_data: dict,
+    wprm_recipe_id: int,
+    cover_media_id: int | None,
+    step_media_results: list[dict | None] | None = None,
+) -> dict | None:
     """
     Create a standard WP post that embeds the WPRM recipe via shortcode.
     Returns {wp_post_id, wp_url} or None.
     """
     shortcode = f'[wprm-recipe id="{wprm_recipe_id}"]'
     tags_str = ", ".join(recipe_data.get("tags", []))
+    description = escape(str(recipe_data.get("description", "")))
+    step_media_results = step_media_results or []
 
-    intro_html = (
-        f"<p>{recipe_data.get('description', '')}</p>\n\n"
-        f"{shortcode}\n\n"
-        f"<p><em>Tags: {tags_str}</em></p>"
-    )
+    content_parts = [
+        f"<p>{description}</p>",
+        shortcode,
+        _build_nutrition_html(recipe_data),
+        _build_step_instructions_html(recipe_data, step_media_results),
+    ]
+
+    if tags_str:
+        content_parts.append(f"<p><em>Tags: {escape(tags_str)}</em></p>")
+
+    post_content = "\n\n".join(part for part in content_parts if part)
 
     post_payload = {
         "title": recipe_data["title"],
-        "content": intro_html,
+        "content": post_content,
         "excerpt": recipe_data.get("description", "")[:160],
         "status": "publish",
         "featured_media": cover_media_id or 0,
@@ -334,12 +525,15 @@ def publish_recipe_to_wp(recipe_id: int) -> dict | None:
 
     # Upload step images (up to 3) — these get attached to individual instruction steps
     step_media_ids: list[int | None] = []
+    step_media_results: list[dict | None] = []
     for step_key in ("step_image_1", "step_image_2", "step_image_3"):
         step_path = row.get(step_key)
         if step_path:
             step_result = _upload_image(step_path, f"{recipe_data['title']} – step {step_key[-1]}")
+            step_media_results.append(step_result)
             step_media_ids.append(step_result["media_id"] if step_result else None)
         else:
+            step_media_results.append(None)
             step_media_ids.append(None)
     logger.info(f"Step image media IDs: {step_media_ids}")
 
@@ -349,7 +543,7 @@ def publish_recipe_to_wp(recipe_id: int) -> dict | None:
         return None
 
     # Create WP post
-    post_result = _create_wp_post(recipe_data, wprm_id, cover_media_id)
+    post_result = _create_wp_post(recipe_data, wprm_id, cover_media_id, step_media_results)
     if not post_result:
         return None
 

@@ -1,10 +1,14 @@
 import os
+import sys
+from pathlib import Path
 import requests
 # Imports from the execution package
 
 from execution.config import (
-    OPENAI_API_KEY,
     GOOGLE_API_KEY,
+    IMAGE_GENERATION_PROVIDER,
+    OPENAI_API_KEY,
+    OPENAI_IMAGE_API_KEY,
     PINTEREST_ACCESS_TOKEN,
     WP_APP_PASSWORD,
     WP_BASE_URL,
@@ -21,7 +25,10 @@ def check_system_health():
     
     missing = []
     if not OPENAI_API_KEY: missing.append("OPENAI_API_KEY")
-    if not GOOGLE_API_KEY: missing.append("GOOGLE_API_KEY")
+    if IMAGE_GENERATION_PROVIDER == "openai" and not OPENAI_IMAGE_API_KEY:
+        missing.append("OPENAI_IMAGE_API_KEY or OPENAI_API_KEY")
+    if IMAGE_GENERATION_PROVIDER == "gemini" and not GOOGLE_API_KEY:
+        missing.append("GOOGLE_API_KEY")
     if not PINTEREST_ACCESS_TOKEN: missing.append("PINTEREST_ACCESS_TOKEN")
     if not WP_APP_PASSWORD: missing.append("WP_APP_PASSWORD")
     

@@ -12,6 +12,7 @@ DB_PATH = os.getenv("DB_PATH", "execution/data/egf.db")
 
 # API Keys
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_IMAGE_API_KEY = os.getenv("OPENAI_IMAGE_API_KEY") or OPENAI_API_KEY
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # Pinterest
@@ -45,7 +46,13 @@ SANDBOX_MODE = os.getenv("SANDBOX_MODE", "True").lower() == "true"
 DAILY_PIN_COUNT = 3
 DAILY_IDEA_GENERATION_COUNT = 20
 TEXT_PREFERENCE_MODEL = "gpt-4o-mini"  # Primary model
-IMAGE_GENERATION_MODEL = "imagen-4.0-generate-001"  # Imagen 4.0 Approved
+IMAGE_GENERATION_PROVIDER = os.getenv("IMAGE_GENERATION_PROVIDER", "openai").lower()
+IMAGE_GENERATION_MODEL = os.getenv("IMAGE_GENERATION_MODEL", "gpt-image-2")
+IMAGE_GENERATION_QUALITY = os.getenv("IMAGE_GENERATION_QUALITY", "medium")
+IMAGE_GENERATION_FORMAT = os.getenv("IMAGE_GENERATION_FORMAT", "jpeg")
+GEMINI_IMAGE_GENERATION_MODEL = os.getenv("GEMINI_IMAGE_GENERATION_MODEL", "imagen-4.0-generate-001")
+PIN_IMAGE_GENERATION_SIZE = os.getenv("PIN_IMAGE_GENERATION_SIZE", "1024x1536")
+STEP_IMAGE_GENERATION_SIZE = os.getenv("STEP_IMAGE_GENERATION_SIZE", "1024x1024")
 
 # Scheduling (3 pins/day, spaced 4 hours apart in US Eastern)
 PUBLISH_TIMEZONE = os.getenv("PUBLISH_TIMEZONE", "US/Eastern")

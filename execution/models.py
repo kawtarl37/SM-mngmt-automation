@@ -47,6 +47,11 @@ class CaptionGenerationResponse(BaseModel):
     alt_text: str
 
 
+class BlogTitleSuggestionResponse(BaseModel):
+    """Schema for suggesting one replacement blog/trend title."""
+    title: str = Field(description="One concise, SEO-friendly title for the approved trend.")
+
+
 class BlogGenerationResponse(BaseModel):
     """Schema for the full blog content returned by the LLM.
     Each field maps to a placeholder in the locked HTML template."""
@@ -102,7 +107,7 @@ class RecipeInstruction(BaseModel):
     """A single numbered instruction step."""
     step_number: int
     text: str = Field(description="Clear, actionable instruction. ~2-4 sentences.")
-    image_prompt: str = Field(description="Imagen 4 image prompt for this step's photo. Describe the exact action visible in 'The Sunday Light Kitchen' setting.")
+    image_prompt: str = Field(description="Image-generation prompt for this step's photo. Describe the exact action visible in 'The Sunday Light Kitchen' setting.")
 
 
 class RecipeGenerationResponse(BaseModel):
@@ -125,6 +130,7 @@ class RecipeGenerationResponse(BaseModel):
     total_time: int = Field(description="Total time in minutes (prep + cook + any resting)")
     servings: int = Field(description="Number of servings (realistic for the recipe type)")
     servings_unit: str = Field(default="servings", description="Unit label, e.g. 'servings', 'muffins', 'cookies', 'slices'")
+    kcal_per_serving: int = Field(description="Estimated calories per serving, rounded to the nearest whole kcal")
 
     # Ingredients
     ingredients: List[RecipeIngredient] = Field(description="Complete ingredient list with exact US measurements. All GF-safe.")
@@ -133,7 +139,7 @@ class RecipeGenerationResponse(BaseModel):
     instructions: List[RecipeInstruction] = Field(description="Numbered steps. Min 4, max 10. Each step includes an image prompt for a step photo.")
 
     # Image prompts
-    cover_image_prompt: str = Field(description="Imagen 4 prompt for the hero/cover image. Overhead or 45-degree beauty shot of the finished dish in 'The Sunday Light Kitchen'. Warm, natural lighting. Food-focused. Realistic GF textures. No text in image. Vertical 9:16 ratio composition.")
+    cover_image_prompt: str = Field(description="Image-generation prompt for the hero/cover image. Overhead or 45-degree beauty shot of the finished dish in 'The Sunday Light Kitchen'. Warm, natural lighting. Food-focused. Realistic GF textures. No text in image. Vertical 9:16 ratio composition.")
     pinterest_description: str = Field(description="160-char max Pinterest pin description. Mentions GF, the dish, a benefit, and a CTA. Brand voice.")
 
 # =======================

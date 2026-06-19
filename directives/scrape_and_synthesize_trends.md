@@ -35,7 +35,7 @@ This directive governs the automated pipeline that:
               ↓
  [Auto-Approve, Image Gen & Schedule]
     → Generate a Pinterest Pin (title, description, keywords, alt)
-    → Generate vertical 9:16 layout cover image using Imagen 4.0
+    → Generate vertical 9:16 layout cover image using the configured image provider
     → Generate WordPress blog post based on the topic details
     → Schedule pin and blog post to the next available queue slot
 ```
@@ -79,7 +79,8 @@ python -m execution.intelligence.trend_synthesizer
 ### Blog & Pin Generation Details
 When a user clicks "Generate Blog & Pin" on an approved topic:
 - The system generates a corresponding `GeneratedPin` record in `status = 'approved'` (to bypass manual pin review).
-- Imagen 4.0 is invoked to generate the cover image.
+- The approved `trendy_topics.title` is the locked blog title. Do not let blog generation silently rewrite it. Use the dashboard "Suggest Another Title" button before generation if a different title is desired.
+- The configured image provider is invoked to generate the cover image. Use `IMAGE_GENERATION_PROVIDER=openai` for OpenAI GPT Image 2 or `IMAGE_GENERATION_PROVIDER=gemini` to switch back to Gemini/Imagen.
 - `blog_generator.py` is invoked to write a complete blog using the HTML template and next rotated Amazon product.
 - `publish_scheduler.py` is called to slot the pin + blog package into the next available slot on the calendar (8 AM, 12 PM, or 4 PM EST).
 - The trend's status in `trendy_topics` updates to `'generated'`.

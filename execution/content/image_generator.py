@@ -1,14 +1,24 @@
-import os
+import base64
 import time
-import requests as http_requests
 from io import BytesIO
-from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 from google import genai
 from google.genai import types
+from openai import OpenAI
 
-from execution.config import GOOGLE_API_KEY, PROMPTS_DIR, TMP_PINS_DIR
+from execution.config import (
+    GEMINI_IMAGE_GENERATION_MODEL,
+    GOOGLE_API_KEY,
+    IMAGE_GENERATION_PROVIDER,
+    IMAGE_GENERATION_MODEL,
+    IMAGE_GENERATION_QUALITY,
+    IMAGE_GENERATION_FORMAT,
+    OPENAI_IMAGE_API_KEY,
+    PIN_IMAGE_GENERATION_SIZE,
+    PROMPTS_DIR,
+    TMP_PINS_DIR,
+)
 from execution.db import get_connection
 from execution.utils.cost_tracker import log_api_cost
 from execution.utils.logger import setup_logger
@@ -145,15 +155,60 @@ def _wrap_text(text: str, font, max_width: int, draw: ImageDraw.Draw) -> list[st
 
 
 # ──────────────────────────────────────
-# Imagen 3 image generation
+# Image generation provider adapters
 # ──────────────────────────────────────
-def generate_pin_image(dish_name: str, pin_id: int, subtitle: str | None = None) -> str | None:
-    """Generate a Pinterest pin image: Imagen 3 food photo + Pillow text overlay."""
+def _generate_with_openai(prompt: str) -> Image.Image:
+    """Generate an image with OpenAI's Image API and return it as a PIL image."""
+    if not OPENAI_IMAGE_API_KEY:
+        raise RuntimeError("OPENAI_IMAGE_API_KEY or OPENAI_API_KEY is not set.")
+
+    client = OpenAI(api_key=OPENAI_IMAGE_API_KEY)
+    result = client.images.generate(
+        model=IMAGE_GENERATION_MODEL,
+        prompt=prompt,
+        n=1,
+        size=PIN_IMAGE_GENERATION_SIZE,
+        quality=IMAGE_GENERATION_QUALITY,
+        output_format=IMAGE_GENERATION_FORMAT,
+    )
+
+    raw_image_bytes = base64.b64decode(result.data[0].b64_json)
+    image = Image.open(BytesIO(raw_image_bytes))
+
+    usage = getattr(result, "usage", None)
+    input_tokens = getattr(usage, "input_tokens", 0) if usage else 0
+    output_tokens = getattr(usage, "output_tokens", 0) if usage else 0
+    log_api_cost("openai", IMAGE_GENERATION_MODEL, input_tokens, output_tokens, "image_generation")
+    return image
+
+
+def _generate_with_gemini(prompt: str) -> Image.Image:
+    """Generate an image with Gemini/Imagen and return it as a PIL image."""
     if not GOOGLE_API_KEY:
-        logger.error("GOOGLE_API_KEY is not set.")
-        return None
+        raise RuntimeError("GOOGLE_API_KEY is not set.")
 
     client = genai.Client(api_key=GOOGLE_API_KEY)
+    result = client.models.generate_images(
+        model=GEMINI_IMAGE_GENERATION_MODEL,
+        prompt=prompt,
+        config=types.GenerateImagesConfig(
+            number_of_images=1,
+            aspect_ratio="9:16",
+        )
+    )
+
+    raw_image_bytes = result.generated_images[0].image.image_bytes
+    image = Image.open(BytesIO(raw_image_bytes))
+    log_api_cost("google", GEMINI_IMAGE_GENERATION_MODEL, 1, 1, "image_generation")
+    return image
+
+
+def generate_pin_image(dish_name: str, pin_id: int, subtitle: str | None = None) -> str | None:
+    """Generate a Pinterest pin image with the configured provider, then save a local JPG."""
+    provider = IMAGE_GENERATION_PROVIDER.lower()
+    if provider not in {"openai", "gemini"}:
+        logger.error("Unsupported IMAGE_GENERATION_PROVIDER '%s'. Use 'openai' or 'gemini'.", provider)
+        return None
 
     try:
         with open(PROMPTS_DIR / "image_prompt_template.txt", "r", encoding="utf-8") as f:
@@ -167,21 +222,18 @@ def generate_pin_image(dish_name: str, pin_id: int, subtitle: str | None = None)
     retries = 3
     for attempt in range(retries):
         try:
-            logger.info(f"Generating image for '{dish_name}' (Attempt {attempt + 1}/{retries})...")
-
-            result = client.models.generate_images(
-                model="imagen-4.0-generate-001",
-                prompt=prompt,
-                config=types.GenerateImagesConfig(
-                    number_of_images=1,
-                    aspect_ratio="9:16",
-                )
+            logger.info(
+                "Generating image for '%s' with %s (Attempt %s/%s)...",
+                dish_name,
+                provider,
+                attempt + 1,
+                retries,
             )
 
-            # result.generated_images[0].image is a google.genai.types.Image (basically bytes + metadata)
-            # We need to convert it to a PIL Image first
-            raw_image_bytes = result.generated_images[0].image.image_bytes
-            image = Image.open(BytesIO(raw_image_bytes))
+            if provider == "openai":
+                image = _generate_with_openai(prompt)
+            else:
+                image = _generate_with_gemini(prompt)
 
             # Resize to exact Pinterest dimensions (1000×1500)
             image = image.resize((1000, 1500), Image.Resampling.LANCZOS)
@@ -194,7 +246,6 @@ def generate_pin_image(dish_name: str, pin_id: int, subtitle: str | None = None)
             output_path = TMP_PINS_DIR / f"pin_{pin_id}.jpg"
             image.save(output_path, "JPEG", quality=95)
 
-            log_api_cost("google", "imagen-4.0", 1, 1, "image_generation")
             logger.info(f"Saved pin image → {output_path}")
             return str(output_path)
 
