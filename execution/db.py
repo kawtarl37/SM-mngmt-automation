@@ -52,6 +52,10 @@ def init_db():
             title TEXT NOT NULL,
             content_type TEXT NOT NULL,
             description TEXT,
+            content_lane TEXT,
+            angle_type TEXT,
+            freshness_hook TEXT,
+            source_hint TEXT,
             engagement_score REAL DEFAULT 0.0,
             novelty_score REAL DEFAULT 0.0,
             seo_score REAL DEFAULT 0.0,
@@ -138,6 +142,7 @@ def init_db():
             category       TEXT NOT NULL,
             recipe_json    TEXT NOT NULL,
             cover_image    TEXT,
+            pinterest_image TEXT,
             step_image_1   TEXT,
             step_image_2   TEXT,
             step_image_3   TEXT,
@@ -147,6 +152,11 @@ def init_db():
             pinterest_id   TEXT,
             created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
+
+        cursor.execute("PRAGMA table_info(generated_recipes)")
+        recipe_columns = {row[1] for row in cursor.fetchall()}
+        if "pinterest_image" not in recipe_columns:
+            cursor.execute("ALTER TABLE generated_recipes ADD COLUMN pinterest_image TEXT")
         
         # API Cost tracking
         cursor.execute('''
@@ -169,7 +179,140 @@ def init_db():
             details TEXT NOT NULL,
             source TEXT NOT NULL,
             relevance_score REAL DEFAULT 0.0,
+            content_lane TEXT,
+            angle_type TEXT,
+            freshness_hook TEXT,
             status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
+        cursor.execute("PRAGMA table_info(content_ideas)")
+        idea_columns = {row[1] for row in cursor.fetchall()}
+        for column_name, column_type in {
+            "content_lane": "TEXT",
+            "angle_type": "TEXT",
+            "freshness_hook": "TEXT",
+            "source_hint": "TEXT",
+        }.items():
+            if column_name not in idea_columns:
+                cursor.execute(f"ALTER TABLE content_ideas ADD COLUMN {column_name} {column_type}")
+
+        cursor.execute("PRAGMA table_info(trendy_topics)")
+        trendy_columns = {row[1] for row in cursor.fetchall()}
+        for column_name, column_type in {
+            "content_lane": "TEXT",
+            "angle_type": "TEXT",
+            "freshness_hook": "TEXT",
+        }.items():
+            if column_name not in trendy_columns:
+                cursor.execute(f"ALTER TABLE trendy_topics ADD COLUMN {column_name} {column_type}")
+
+        # Research/source intelligence tables for reusable blog/newsletter/app briefs
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS source_registry (
+            source_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            base_url TEXT NOT NULL,
+            lane TEXT NOT NULL,
+            credibility_score REAL DEFAULT 0.0,
+            monitor_frequency TEXT,
+            notes TEXT,
+            enabled BOOLEAN DEFAULT TRUE,
+            approval_status TEXT DEFAULT 'pending_approval',
+            added_by TEXT DEFAULT 'system',
+            approved_at TIMESTAMP,
+            approved_by TEXT,
+            content_angle TEXT,
+            best_home TEXT,
+            fact_check_required BOOLEAN DEFAULT TRUE,
+            priority_tier TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
+        cursor.execute("PRAGMA table_info(source_registry)")
+        source_columns = {row[1] for row in cursor.fetchall()}
+        for column_name, column_type in {
+            "approval_status": "TEXT DEFAULT 'pending_approval'",
+            "added_by": "TEXT DEFAULT 'system'",
+            "approved_at": "TIMESTAMP",
+            "approved_by": "TEXT",
+            "content_angle": "TEXT",
+            "best_home": "TEXT",
+            "fact_check_required": "BOOLEAN DEFAULT TRUE",
+            "priority_tier": "TEXT",
+        }.items():
+            if column_name not in source_columns:
+                cursor.execute(f"ALTER TABLE source_registry ADD COLUMN {column_name} {column_type}")
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS source_notifications (
+            notification_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id INTEGER,
+            notification_type TEXT NOT NULL,
+            message TEXT NOT NULL,
+            status TEXT DEFAULT 'unread',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TIMESTAMP,
+            FOREIGN KEY(source_id) REFERENCES source_registry(source_id)
+        )''')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS research_queries (
+            query_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic_title TEXT NOT NULL,
+            lane TEXT NOT NULL,
+            angle_type TEXT,
+            platform TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            query_text TEXT NOT NULL,
+            priority INTEGER DEFAULT 1,
+            reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS research_sources (
+            research_source_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic_title TEXT NOT NULL,
+            lane TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            url TEXT NOT NULL,
+            title TEXT,
+            credibility_score REAL DEFAULT 0.0,
+            fetched_at TIMESTAMP,
+            status TEXT DEFAULT 'planned',
+            notes TEXT,
+            snippet TEXT,
+            published_at TIMESTAMP,
+            external_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS research_facts (
+            fact_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic_title TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            claim TEXT NOT NULL,
+            evidence_text TEXT,
+            confidence_score REAL DEFAULT 0.0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS content_briefs (
+            brief_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic_title TEXT NOT NULL,
+            lane TEXT NOT NULL,
+            angle_type TEXT,
+            platform TEXT NOT NULL,
+            reader_problem TEXT,
+            thesis TEXT,
+            source_plan_json TEXT NOT NULL,
+            source_candidates_json TEXT NOT NULL,
+            platform_sections_json TEXT NOT NULL,
+            status TEXT DEFAULT 'planned',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
         

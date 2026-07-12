@@ -23,7 +23,7 @@ from execution.config import DB_PATH, TMP_PINS_DIR, SANDBOX_MODE
 from execution.content.publish_scheduler import schedule_approved_pins, run_scheduled_publishes, execute_single_publish
 from execution.content.generate_custom_content import generate_custom
 from execution.content.recipe_generator import generate_recipe
-from execution.content.recipe_wp_publisher import build_wprm_import_payload, publish_recipe_to_wp
+from execution.content.recipe_wp_publisher import build_wprm_import_payload, publish_recipe_to_wp, upload_recipe_image_to_wp
 from execution.content.pinterest_publisher import post_pin_to_pinterest
 
 # ── Async recipe generation task store ──────────────────────────────────────
@@ -69,12 +69,14 @@ def _get_recipe_row(recipe_id: int) -> dict | None:
 
 @app.route('/api/pins', methods=['GET'])
 def get_pending_pins():
+    from execution.editorial.schema import ensure_editorial_schema
+    ensure_editorial_schema()
     conn = get_db_connection()
     cursor = conn.cursor()
     # Left join to accommodate custom pins where idea_id = 0
     cursor.execute("""
         SELECT p.pin_id, p.title, p.description, p.image_path, p.status, p.seo_keywords,
-               c.content_type
+               c.content_type, c.content_lane, c.angle_type, c.freshness_hook, c.source_hint
         FROM generated_pins p
         LEFT JOIN content_ideas c ON p.idea_id = c.idea_id
         WHERE p.status = 'pending'
@@ -256,7 +258,7 @@ def api_recipe_reject(recipe_id):
 
 @app.route('/api/recipe/<int:recipe_id>/download/images', methods=['GET'])
 def api_recipe_download_images(recipe_id):
-    """Download the generated cover + step images for a recipe as a zip file."""
+    """Download the generated cover, Pinterest pin, and step images for a recipe as a zip file."""
     row = _get_recipe_row(recipe_id)
     if not row:
         return jsonify({"success": False, "error": "Recipe not found"}), 404
@@ -268,6 +270,7 @@ def api_recipe_download_images(recipe_id):
 
     image_fields = [
         ("cover", row.get("cover_image")),
+        ("pinterest-pin", row.get("pinterest_image")),
         ("step-1", row.get("step_image_1")),
         ("step-2", row.get("step_image_2")),
         ("step-3", row.get("step_image_3")),
@@ -342,6 +345,7 @@ def api_recipe_publish_pinterest(recipe_id):
         return jsonify({"success": False, "error": "Recipe must be published to WordPress first."}), 400
 
     recipe_data = json.loads(row["recipe_json"])
+    pin_image_path = row.get("pinterest_image") or row.get("cover_image", "")
 
     # Temporarily insert into generated_pins table so the existing publisher can use it
     pin_conn = sqlite3.connect(DB_PATH)
@@ -355,7 +359,7 @@ def api_recipe_publish_pinterest(recipe_id):
         recipe_data["title"],
         recipe_data.get("pinterest_description", recipe_data.get("description", "")),
         ", ".join(recipe_data.get("tags", [])),
-        row.get("cover_image", ""),
+        pin_image_path,
         row["wp_url"],
     ))
     temp_pin_id = pin_cur.lastrowid
@@ -363,30 +367,18 @@ def api_recipe_publish_pinterest(recipe_id):
     pin_conn.close()
 
     try:
-        # Get media_url from WP for the cover image
-        import requests as _req
-        from execution.config import WP_BASE_URL, WP_USERNAME, WP_APP_PASSWORD
-        media_url = None
-        if row.get("wp_post_id"):
-            try:
-                resp = _req.get(
-                    f"{WP_BASE_URL}/wp-json/wp/v2/posts/{row['wp_post_id']}",
-                    auth=(WP_USERNAME, WP_APP_PASSWORD), timeout=10
-                )
-                featured_id = resp.json().get("featured_media", 0)
-                if featured_id:
-                    mresp = _req.get(
-                        f"{WP_BASE_URL}/wp-json/wp/v2/media/{featured_id}",
-                        auth=(WP_USERNAME, WP_APP_PASSWORD), timeout=10
-                    )
-                    media_url = mresp.json().get("source_url")
-            except Exception:
-                pass
+        media_result = upload_recipe_image_to_wp(
+            pin_image_path,
+            f"{recipe_data['title']} Pinterest pin",
+        ) if pin_image_path else None
+        media_url = media_result.get("media_url") if media_result else None
+        if not media_url:
+            return jsonify({"success": False, "error": "Could not upload the Pinterest pin image to WordPress media."}), 500
 
         result = post_pin_to_pinterest(
             pin_id=temp_pin_id,
             wp_url=row["wp_url"],
-            media_url=media_url or ""
+            media_url=media_url
         )
         if result:
             # Update recipe with pinterest_id
@@ -730,6 +722,9 @@ Create a new Pinterest pin idea and caption for this trendy topic:
 Title: {topic['title']}
 Details: {topic['details']}
 Source: {topic['source']}
+Editorial lane: {topic.get('content_lane') or 'unspecified'}
+Angle type: {topic.get('angle_type') or 'unspecified'}
+Freshness hook: {topic.get('freshness_hook') or 'Make the topic feel current and useful.'}
 
 Provide:
 1. A catchy, Pinterest-optimized Pin Title (incorporating GF keywords, max 70 chars).
@@ -815,6 +810,36 @@ def api_config():
         "sandbox_mode": _SM,
         "api_base": "https://api-sandbox.pinterest.com/v5" if _SM else "https://api.pinterest.com/v5",
     })
+
+
+@app.route('/api/sources', methods=['GET'])
+def api_sources():
+    from execution.research.source_manager import list_sources
+
+    status = request.args.get("status")
+    return jsonify(list_sources(status=status))
+
+
+@app.route('/api/source-notifications', methods=['GET'])
+def api_source_notifications():
+    from execution.research.source_manager import list_notifications
+
+    status = request.args.get("status", "unread")
+    return jsonify(list_notifications(status=status))
+
+
+@app.route('/api/sources/<int:source_id>/approve', methods=['POST'])
+def api_source_approve(source_id):
+    from execution.research.source_manager import approve_source
+
+    return jsonify({"success": approve_source(source_id)})
+
+
+@app.route('/api/sources/<int:source_id>/reject', methods=['POST'])
+def api_source_reject(source_id):
+    from execution.research.source_manager import reject_source
+
+    return jsonify({"success": reject_source(source_id)})
 
 
 @app.route('/sandbox/pin')
@@ -1388,6 +1413,7 @@ def index():
         function buildRecipeCard(r, showApproveReject) {
             const d = r.recipe_data || {};
             const cover = imgFile(r.cover_image);
+            const pin = imgFile(r.pinterest_image);
             const s1 = imgFile(r.step_image_1), s2 = imgFile(r.step_image_2), s3 = imgFile(r.step_image_3);
             const difficulty = d.difficulty || '—';
             const prep = d.prep_time ? d.prep_time+'m' : '—';
@@ -1480,8 +1506,9 @@ def index():
                     <div class="step-list">${steps}</div>
                 </div>
                 <div id="rtab-${r.recipe_id}-images" class="recipe-tab-content">
-                    <p style="margin-bottom:10px;font-size:.8rem;color:#888">Cover + 3 step photos</p>
+                    <p style="margin-bottom:10px;font-size:.8rem;color:#888">Cover + Pinterest pin + 3 step photos</p>
                     ${cover ? `<div style="margin-bottom:10px;border-radius:8px;overflow:hidden;max-height:200px"><img src="/images/${cover}" style="width:100%;object-fit:cover"></div>` : ''}
+                    ${pin ? `<div style="position:relative;margin-bottom:10px;border-radius:8px;overflow:hidden;max-height:260px;background:#f6f1ec"><img src="/images/${pin}" style="width:100%;object-fit:contain;display:block"><span class="step-img-label">Pinterest Pin</span></div>` : ''}
                     <div class="step-images-grid">${stepImgs}</div>
                 </div>
                 <div class="recipe-actions">${actionBtns}</div>
@@ -1536,7 +1563,7 @@ def index():
 
         async function publishRecipePinterest(id, btn) {
             const env = _sandboxMode ? 'Pinterest SANDBOX (api-sandbox.pinterest.com)' : 'Pinterest (production)';
-            if (!confirm(`Post this recipe to ${env}?\nThe cover image + WP URL will be used as the Pin.`)) return;
+            if (!confirm(`Post this recipe to ${env}?\nThe Pinterest pin image + WP URL will be used.`)) return;
             btn.classList.add('loading'); btn.disabled = true;
             if (_sandboxMode) {
                 console.info(`[EGF SANDBOX] Calling POST /api/recipe/${id}/publish/pinterest`);
