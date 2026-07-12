@@ -10,7 +10,14 @@ GF_KEYWORDS = {
     "gluten free", "gluten-free", "gf", "celiac", "coeliac", 
     "wheat free", "dairy free", "rice flour", "almond flour", 
     "tapioca", "xanthan gum", "oat flour", "baking", "sourdough",
-    "bread", "pasta", "pizza", "substitute", "alternative"
+    "bread", "pasta", "pizza", "substitute", "alternative",
+    "label", "labeling", "certified", "certification", "recall",
+    "fda", "allergen", "packaging", "restaurant", "menu", "chain",
+    "travel", "airport", "app", "scanner", "barcode", "product",
+    "brand", "costco", "trader joe", "aldi", "target", "walmart",
+    "air fryer", "toaster", "bread maker", "gadget", "tool",
+    "shared kitchen", "pantry", "organization", "lunch box",
+    "compare", "comparison", "review", "taste test"
 }
 
 def parse_date(date_str: str) -> datetime:

@@ -20,3 +20,13 @@ RULES:
 10. Do NOT invent product data. Use only the product details provided above.
 11. Avoid keyword stuffing. Weave keywords naturally.
 12. Do NOT use emojis in the blog body.
+13. Do not write a generic beginner article unless the topic is explicitly for beginners.
+14. Open with a specific, conversational hook: a small scene, a funny frustration, or a sharp question. Do not start with "In today's world" or broad encyclopedia-style setup.
+15. Every section must do a different job:
+    - Section 1: define the real-world problem or debate.
+    - Section 2: naturally connect the provided Amazon product to the reader's practical need.
+    - Section 3: give concrete steps, checks, comparisons, or decision criteria.
+    - Section 4: include Claire's opinionated but fair take.
+    - Section 5: give the reader a clear "what to do next" plan.
+16. Prefer specifics over broad advice. Mention exact checks, shopping behaviors, kitchen systems, comparison criteria, or source types where relevant.
+17. The article should feel like a smart gluten-free friend wrote it after doing the homework, not like a wellness brochure wearing beige pants.

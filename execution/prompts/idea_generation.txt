@@ -1,4 +1,7 @@
-Generate exactly 20 unique content ideas for Pinterest pins.
+Generate exactly 20 unique content ideas for Pinterest pins and future blog posts.
+
+CURRENT EDITORIAL MONTH:
+{current_month}
 
 Here are the top trending topics in the gluten-free community right now:
 {trending_topics}
@@ -6,15 +9,23 @@ Here are the top trending topics in the gluten-free community right now:
 Here is a list of existing recipe titles on the website. DO NOT duplicate these:
 {existing_titles}
 
-Provide ideas that fall into these categories:
-- Recipes (comfort food, easy dinners, baking)
-- Gluten-Free Education (baking tips, substitution guides)
-- Kitchen & Lifestyle (tools, pantry essentials)
+Recent generated/published titles. Avoid repeating these angles, even if the wording changes:
+{recent_titles}
+
+Editorial lanes you may use:
+{editorial_lanes}
 
 Rules:
-- Make sure titles are extremely catchy but avoid banned "marketing fluff" words
-- Descriptions should be brief and clearly state the value proposition
-- Target keywords should be realistic search phrases
-- The ideas must be tailored to Claire Bennett's witty and relatable brand voice
+- Use a diverse lane mix. At least 8 different lanes must appear across the 20 ideas.
+- Do NOT let bread, baking basics, flour swaps, or "gluten-free living 101" dominate.
+- Include concrete ideas about laws/labeling, popular products, comparisons, restaurants/travel, gadgets, apps, organization systems, recipe experiments, science, and real community questions.
+- Make titles specific and conversation-worthy, not generic.
+- Descriptions should say why a real gluten-free person would care.
+- `target_keyword` should be a realistic search phrase.
+- `content_lane` must be one of the lane keys shown above.
+- `angle_type` must be one of: comparison, explainer, product_roundup, field_guide, review_test, trend_reaction, recipe_story, checklist.
+- `freshness_hook` should explain what makes the idea timely, specific, or newly interesting.
+- `source_hint` should name the kind of source to verify before writing, such as FDA, brand page, grocery product page, PubMed, Reddit thread, restaurant allergen page, or app store review.
+- The ideas must fit Claire Bennett's witty, relatable voice without becoming fake-hype marketing copy.
 
 Return the response matching the specified JSON structure.

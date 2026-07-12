@@ -68,6 +68,9 @@ class TrendyTopic(Base):
     details = Column(Text, nullable=False)
     source = Column(String, nullable=False)
     relevance_score = Column(Float, default=0.0)
+    content_lane = Column(String)
+    angle_type = Column(String)
+    freshness_hook = Column(Text)
     status = Column(String, default='pending')
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 

@@ -6,6 +6,9 @@ from execution.utils.llm_client import LLMClient
 from execution.utils.logger import setup_logger
 from execution.intelligence.trend_analyzer import get_top_trends
 from execution.intelligence.duplication_checker import get_existing_recipes_formatted
+from execution.editorial.memory import current_month_label, memory_prompt_block
+from execution.editorial.schema import ensure_editorial_schema
+from execution.editorial.taxonomy import classify_lane, lane_prompt_block
 
 logger = setup_logger("idea_generator")
 
@@ -37,8 +40,11 @@ def generate_ideas() -> IdeaGenerationResponse | None:
         return None
         
     user_prompt = user_prompt_template.format(
+        current_month=current_month_label(),
         trending_topics=trends_text,
-        existing_titles=existing_titles
+        existing_titles=existing_titles,
+        recent_titles=memory_prompt_block(limit=80),
+        editorial_lanes=lane_prompt_block(),
     )
     
     # 3. Call LLM
@@ -61,17 +67,29 @@ def generate_ideas() -> IdeaGenerationResponse | None:
 
 def save_ideas_to_db(response: IdeaGenerationResponse):
     """Save the generated ideas to the content_ideas table."""
+    ensure_editorial_schema()
     batch_date = datetime.now().strftime("%Y-%m-%d")
     inserted = 0
     
     with get_connection() as conn:
         cursor = conn.cursor()
         for idea in response.ideas:
+            lane = idea.content_lane or classify_lane(f"{idea.title} {idea.description}")
             cursor.execute(
                 """INSERT INTO content_ideas 
-                   (title, content_type, description, batch_date)
-                   VALUES (?, ?, ?, ?)""",
-                (idea.title, idea.content_type, idea.description, batch_date)
+                   (title, content_type, description, content_lane, angle_type,
+                    freshness_hook, source_hint, batch_date)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    idea.title,
+                    idea.content_type,
+                    idea.description,
+                    lane,
+                    idea.angle_type,
+                    idea.freshness_hook,
+                    idea.source_hint,
+                    batch_date,
+                )
             )
             inserted += 1
         conn.commit()

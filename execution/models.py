@@ -34,6 +34,22 @@ class IdeaGenerationItem(BaseModel):
     description: str
     target_keyword: str
     estimated_engagement: str = Field(description="'high', 'medium', or 'low'")
+    content_lane: Optional[str] = Field(
+        default=None,
+        description="Editorial lane key, e.g. 'laws_labeling', 'product_watch', or 'comparison'",
+    )
+    angle_type: Optional[str] = Field(
+        default=None,
+        description="Editorial format, e.g. comparison, explainer, product_roundup, field_guide, review_test",
+    )
+    freshness_hook: Optional[str] = Field(
+        default=None,
+        description="Why this idea feels timely, specific, or newly useful right now",
+    )
+    source_hint: Optional[str] = Field(
+        default=None,
+        description="Likely source type to verify before writing, e.g. FDA, brand page, Reddit, Google News",
+    )
     
 class IdeaGenerationResponse(BaseModel):
     """Schema for the full list of 20 ideas returned by the LLM."""
@@ -151,6 +167,18 @@ class TrendyTopicItem(BaseModel):
     details: str = Field(description="A 3-5 sentence explanation of what people are discussing or what the study found, written in brand voice.")
     source: str = Field(description="Source of the trend, e.g. 'Reddit (r/celiac)' or 'PubMed (Nutrients)'")
     relevance_score: float = Field(description="Estimated relevance to EGF readers between 0.0 and 1.0")
+    content_lane: Optional[str] = Field(
+        default=None,
+        description="Editorial lane key, e.g. laws_labeling, product_watch, comparison, restaurants_travel",
+    )
+    angle_type: Optional[str] = Field(
+        default=None,
+        description="Editorial format, e.g. comparison, explainer, product_roundup, field_guide, review_test",
+    )
+    freshness_hook: Optional[str] = Field(
+        default=None,
+        description="A short explanation of why this is timely or interesting now",
+    )
 
 class TrendyTopicResponse(BaseModel):
     topics: List[TrendyTopicItem]

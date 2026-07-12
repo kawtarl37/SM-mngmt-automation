@@ -3,12 +3,16 @@ Generate a Pinterest pin title and description for the following content idea.
 Idea: {idea_title}
 Type: {content_type}
 Target keyword: {target_keyword}
+Editorial lane: {content_lane}
+Angle type: {angle_type}
+Freshness hook: {freshness_hook}
 
 Requirements:
 - Pin title: curiosity + clarity, max 60 characters
-  Examples: "Gluten-Free Pancakes That Actually Stay Fluffy"
-- Description: 2-3 sentences, witty, include target keyword naturally
+- Match the lane and angle. A comparison should sound like a comparison; a product/app/tool topic should sound practical and current; a law/labeling topic should sound clear and useful.
+- Description: 2-3 sentences, witty, specific, include target keyword naturally
 - Include 3-5 relevant hashtags
 - SEO: keyword in first sentence
+- Avoid generic beginner phrasing and avoid making every caption about bread or baking.
 
 Return JSON with exactly these fields: pin_title, pin_description, hashtags, alt_text

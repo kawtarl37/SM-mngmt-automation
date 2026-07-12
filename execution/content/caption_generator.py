@@ -3,19 +3,25 @@ from execution.db import get_connection
 from execution.models import CaptionGenerationResponse
 from execution.utils.llm_client import LLMClient
 from execution.utils.logger import setup_logger
+from execution.editorial.schema import ensure_editorial_schema
 
 logger = setup_logger("caption_generator")
 
 def generate_captions():
     """Find pending generated_pins that need captions and generate them."""
     logger.info("Starting caption generation for pending pins...")
+    ensure_editorial_schema()
     
     # 1. Fetch pending pins (currently just stubs from idea_scorer)
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """SELECT pin_id, title, description,
-                      (SELECT content_type FROM content_ideas c WHERE c.idea_id = p.idea_id) as content_type
+                      (SELECT content_type FROM content_ideas c WHERE c.idea_id = p.idea_id) as content_type,
+                      (SELECT content_lane FROM content_ideas c WHERE c.idea_id = p.idea_id) as content_lane,
+                      (SELECT angle_type FROM content_ideas c WHERE c.idea_id = p.idea_id) as angle_type,
+                      (SELECT freshness_hook FROM content_ideas c WHERE c.idea_id = p.idea_id) as freshness_hook,
+                      (SELECT source_hint FROM content_ideas c WHERE c.idea_id = p.idea_id) as source_hint
                FROM generated_pins p 
                WHERE status = 'pending' AND (seo_keywords IS NULL OR image_path IS NULL)"""
         )
@@ -45,7 +51,10 @@ def generate_captions():
         user_prompt = user_prompt_template.format(
             idea_title=pin["title"],
             content_type=pin.get("content_type", "recipe"),
-            target_keyword=pin["title"].lower() # Rough proxy, LLM will optimize it
+            target_keyword=pin["title"].lower(), # Rough proxy, LLM will optimize it
+            content_lane=pin.get("content_lane") or "unspecified",
+            angle_type=pin.get("angle_type") or "unspecified",
+            freshness_hook=pin.get("freshness_hook") or pin.get("source_hint") or "Make the value concrete.",
         )
         
         try:
