@@ -13,7 +13,8 @@ Publishing is scheduled at **3 times per day** — 8 AM, 12 PM, and 4 PM **US Ea
 ## Inputs
 - An approved `pin_id` from the `generated_pins` table (status = `approved`)
 - The pin's `title`, `description`, and `image_path`
-- The next Amazon product to rotate (picked by oldest `last_used` date from `amazon_products` table)
+- An approved Amazon product selected by topic relevance, content lane fit, price tier, and `last_used` freshness
+- Optional `AMAZON_ASSOCIATE_TAG` in `.env` for direct Amazon affiliate URLs
 - WordPress REST API credentials (`WP_BASE_URL`, `WP_USERNAME`, `WP_APP_PASSWORD` in `.env`)
 - Pinterest API access token and board ID in `.env`
 
@@ -32,7 +33,7 @@ Publishing is scheduled at **3 times per day** — 8 AM, 12 PM, and 4 PM **US Ea
   → Check publish_schedule WHERE scheduled_time <= now AND status = pending
         ↓
 [blog_generator.py → generate_blog(pin_id)]
-  → Pick Amazon product with oldest last_used
+  → Pick approved Amazon product by topic/lane relevance
   → Call GPT-4o-mini with blog_generation.txt prompt
   → Fill locked HTML template (Blog-Template.md)
   → Save to blogs table
@@ -84,12 +85,16 @@ python -m execution.content.publish_scheduler
 
 ---
 
-## Amazon Product Rotation
+## Amazon Product Selection
 
 - Products are stored in `amazon_products` table (seeded from `db.py`)
-- The product with the **oldest `last_used` timestamp** is always selected next
+- Products can include `keywords`, `content_lanes`, `price_tier`, and `priority_score`
+- `blog_generator.py` scores approved products against the pin topic, description, and content lane
+- The product with the strongest relevance score is selected; `last_used` breaks ties
+- If no product is a strong match, the oldest `last_used` product is used as a fallback
 - After use, `last_used` is updated to the current UTC time
-- With 5 products and ~3 posts/day, each product rotates roughly every 1–2 days
+- Direct Amazon URLs automatically receive `AMAZON_ASSOCIATE_TAG` when configured in `.env`
+- Short `amzn.to` links are left unchanged because affiliate attribution is handled by the short link destination
 
 ---
 
@@ -174,3 +179,4 @@ Opens the auth URL in your browser, catches the callback on port 8888, saves tok
 | 2026-04-27 | Notes section restructured: `substitutions` field added to model → rendered as HTML `<ul>` under "Substitutions & Variations"; `notes` → "Claire's Gluten-Free Baking Notes"; `tips` → "Tips". Matches live recipe page format. |
 | 2026-06-10 | Dashboard recipe cards now expose downloads for generated recipe images (`cover.jpg`, `step-1.jpg`, `step-2.jpg`, `step-3.jpg`) and a clean WPRM REST JSON payload (`title`, `status`, `recipe`) for manual import/testing. |
 | 2026-06-15 | Recipe WordPress posts now include explicit inline step-by-step HTML after the WPRM shortcode: each uploaded step image URL is rendered immediately after the matching instruction step. This is a fallback for cases where WPRM ignores `instructions_flat[].image_id`. Recipe generation now includes `kcal_per_serving`; older recipes fall back to a rough ingredient-based kcal estimate in the post's Nutrition Facts block. |
+| 2026-06-19 | Recipe generation now composes a separate Pinterest pin image from the generated hero cover: `recipe_{id}_pinterest.jpg`, exported in downloads as `pinterest-pin.jpg`. Pin size is 1000x2100 (1:2.1), rendered as JPEG under Pinterest's 20MB limit, with a clean borderless white Playfair Display recipe-title overlay at the top. Recipe Pinterest publishing now uploads this separate pin image to WP Media and uses that public media URL for Pinterest; older recipes fall back to the cover image if no `pinterest_image` exists. |

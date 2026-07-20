@@ -95,6 +95,29 @@ class BlogGenerationResponse(BaseModel):
     category: str = Field(description="Blog category, e.g. 'Gluten-Free Living', 'Recipes', 'Tips'")
 
 
+class DraftSection(BaseModel):
+    """One reusable section in a research-backed platform draft."""
+
+    heading: str
+    body: str = Field(description="Draft body for this section. Basic HTML is allowed for blog content only.")
+
+
+class PlatformDraftResponse(BaseModel):
+    """Structured draft generated from a research-backed content brief."""
+
+    title: str = Field(description="Platform-appropriate title, subject line, pin title, or app card title.")
+    dek: str = Field(description="One concise summary/subtitle for the draft.")
+    sections: List[DraftSection] = Field(description="Ordered draft sections matching the requested platform.")
+    call_to_action: str = Field(description="Reader next step or editorial CTA.")
+    source_notes: List[str] = Field(description="Short notes naming which sources support important claims.")
+    verification_notes: List[str] = Field(
+        description="Any claims that need fresh official checking before publishing."
+    )
+    status_recommendation: str = Field(
+        description="Recommended workflow status: 'ready_for_review', 'needs_more_sources', or 'do_not_publish_yet'."
+    )
+
+
 # =======================
 # Recipe Generation Models (WP Recipe Maker)
 # =======================

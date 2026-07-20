@@ -1,0 +1,28 @@
+Generate exactly {idea_count} unique content ideas for the `{lane_key}` editorial lane.
+
+CURRENT EDITORIAL MONTH:
+{current_month}
+
+LANE:
+{lane_label}: {lane_description}
+
+Useful example angles for this lane:
+{lane_examples}
+
+Recent generated/published titles. Avoid repeating these angles, even if the wording changes:
+{recent_titles}
+
+Optional user topic hint:
+{topic_hint}
+
+Rules:
+- Every idea must use `content_lane` exactly equal to `{lane_key}`.
+- Make each title specific, useful, and conversation-worthy.
+- Descriptions should say why a real gluten-free person would care.
+- `target_keyword` should be a realistic search phrase.
+- `angle_type` must be one of: comparison, explainer, product_roundup, field_guide, review_test, trend_reaction, recipe_story, checklist.
+- `freshness_hook` should explain what makes the idea timely, specific, or newly interesting.
+- `source_hint` should name the kind of source to verify before writing, such as FDA, brand page, grocery product page, PubMed, Reddit thread, restaurant allergen page, or app store review.
+- The ideas must fit Claire Bennett's witty, relatable voice without becoming fake-hype marketing copy.
+
+Return the response matching the specified JSON structure.

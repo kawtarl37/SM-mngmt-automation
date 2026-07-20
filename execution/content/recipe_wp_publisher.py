@@ -234,6 +234,11 @@ def _upload_image(image_path: str, title: str) -> dict | None:
         return None
 
 
+def upload_recipe_image_to_wp(image_path: str, title: str) -> dict | None:
+    """Public wrapper for uploading recipe-related images to WP Media."""
+    return _upload_image(image_path, title)
+
+
 # ─────────────────────────────────────────────
 # Step 2: Create WPRM Recipe
 # ─────────────────────────────────────────────

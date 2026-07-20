@@ -293,7 +293,107 @@ Collectors save normalized records into `research_sources`.
 When a fetched source has a usable snippet, the runner creates a conservative `research_facts` entry using the source title and snippet as evidence.
 The runner also returns a `platform_package` with sections tailored to the requested platform.
 
+---
+
+## Draft Generation
+
+Research-backed drafts are generated after the source package exists:
+
+```bash
+python -m execution.research.draft_generator "new gluten-free bread products" --lane product_watch --platform newsletter
+```
+
+Draft generation:
+
+1. Runs the research runner.
+2. Builds a platform package.
+3. Calls the LLM using `execution/prompts/platform_draft_generation.txt`.
+4. Saves the result to `content_drafts`.
+5. Marks the draft as `pending_review`.
+
+Drafts must not publish or schedule automatically.
+
+Review endpoints:
+
+```text
+GET  /api/content-drafts
+GET  /api/content-drafts?status=pending_review
+POST /api/content-drafts/generate
+POST /api/content-drafts/<draft_id>/approve
+POST /api/content-drafts/<draft_id>/reject
+```
+
+The `content_drafts` table stores:
+
+- platform
+- lane
+- angle type
+- title
+- dek
+- structured content JSON
+- source URLs
+- status
+- approval metadata
+
 Future collectors should implement the `SourceCollector` protocol in `execution/research/collectors/base.py` and return `CollectedSource` objects.
+
+---
+
+## Lane-Level Idea and Content Endpoints
+
+The dashboard exposes lane-scoped API endpoints so automations can create ideas or reviewable content for any editorial lane without hard-coding lane logic in the frontend.
+
+```text
+GET  /api/editorial/lanes
+GET  /api/editorial/lanes/<lane>/ideas?limit=20
+POST /api/editorial/lanes/<lane>/ideas
+POST /api/editorial/lanes/<lane>/content
+GET  /api/editorial/assets
+POST /api/editorial/ideas/<idea_id>/assets
+POST /api/blogs/<blog_id>/publish/wp
+POST /api/pins/<pin_id>/post/pinterest
+GET  /api/pins/<pin_id>/copy
+GET  /api/newsletters/<draft_id>/copy
+```
+
+Implementation:
+
+- `execution/editorial/lane_content_service.py`
+- `execution/editorial/content_asset_service.py`
+- `execution/prompts/lane_idea_generation.txt`
+
+`POST /api/editorial/lanes/<lane>/ideas` accepts:
+
+- `idea_count`: number of ideas to create, capped by the service
+- `topic_hint`: optional narrowing angle
+- `sample`: if true, creates deterministic no-token ideas
+- `persist`: if true, saves ideas to `content_ideas`
+
+`POST /api/editorial/lanes/<lane>/content` accepts:
+
+- `topic_title`: topic to turn into content
+- `platform`: `blog`, `newsletter`, `pinterest`, or `app`
+- `angle_type`: optional editorial format
+- `topic_hint`: fallback hint if no title is supplied
+- `limit_per_task`: research collector limit
+- `sample`: if true, creates deterministic no-token sample content
+- `persist`: if true, saves generated drafts to `content_drafts`
+
+Sample mode is for UI and contract testing only. Non-sample content creation may call OpenAI and source collectors, so it should remain review-gated and never publish or schedule automatically.
+
+`POST /api/editorial/ideas/<idea_id>/assets` turns an approved or recent idea into selected reviewable assets:
+
+- `pin`: creates/updates a `generated_pins` row with title, description, keywords, and image
+- `blog`: creates a `blogs` row linked to the pin
+- `newsletter`: creates a text-only `content_drafts` row with `platform = 'newsletter'`
+
+Generated assets are intentionally separated in the dashboard:
+
+- Website content is published through `POST /api/blogs/<blog_id>/publish/wp`.
+- Pinterest content is posted through `POST /api/pins/<pin_id>/post/pinterest` after the website/blog has a destination URL.
+- Newsletter text is copied from `GET /api/newsletters/<draft_id>/copy`.
+
+Recipe publishing remains separate. Generated recipes must publish to WordPress through WP Recipe Maker routes only, not through the normal blog asset pipeline.
 
 ---
 

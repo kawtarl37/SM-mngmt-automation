@@ -110,7 +110,7 @@ def init_db():
             published_at TIMESTAMP
         )''')
         
-        # Amazon products (rotated by oldest last_used)
+        # Amazon products (selected by topic relevance, then rotation)
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS amazon_products (
             product_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,8 +118,23 @@ def init_db():
             description TEXT NOT NULL,
             url TEXT NOT NULL,
             image_url TEXT NOT NULL,
+            keywords TEXT,
+            content_lanes TEXT,
+            price_tier TEXT DEFAULT 'affordable',
+            priority_score REAL DEFAULT 1.0,
             last_used TIMESTAMP
         )''')
+
+        cursor.execute("PRAGMA table_info(amazon_products)")
+        amazon_columns = {row[1] for row in cursor.fetchall()}
+        if "keywords" not in amazon_columns:
+            cursor.execute("ALTER TABLE amazon_products ADD COLUMN keywords TEXT")
+        if "content_lanes" not in amazon_columns:
+            cursor.execute("ALTER TABLE amazon_products ADD COLUMN content_lanes TEXT")
+        if "price_tier" not in amazon_columns:
+            cursor.execute("ALTER TABLE amazon_products ADD COLUMN price_tier TEXT DEFAULT 'affordable'")
+        if "priority_score" not in amazon_columns:
+            cursor.execute("ALTER TABLE amazon_products ADD COLUMN priority_score REAL DEFAULT 1.0")
         
         # Publish schedule (3 slots per day, US Eastern)
         cursor.execute('''
@@ -315,11 +330,31 @@ def init_db():
             status TEXT DEFAULT 'planned',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS content_drafts (
+            draft_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            brief_id INTEGER,
+            topic_title TEXT NOT NULL,
+            lane TEXT NOT NULL,
+            angle_type TEXT,
+            platform TEXT NOT NULL,
+            title TEXT NOT NULL,
+            dek TEXT,
+            content_json TEXT NOT NULL,
+            source_urls_json TEXT NOT NULL,
+            status TEXT DEFAULT 'pending_review',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            approved_at TIMESTAMP,
+            approved_by TEXT,
+            rejection_reason TEXT,
+            FOREIGN KEY(brief_id) REFERENCES content_briefs(brief_id)
+        )''')
         
         conn.commit()
 
 
-def seed_amazon_products():
+def seed_amazon_products_legacy():
     """Seed the amazon_products table with the 5 initial products if empty."""
     products = [
         {
@@ -368,6 +403,126 @@ def seed_amazon_products():
             print(f"Seeded {len(products)} Amazon products into DB.")
         else:
             print(f"Amazon products table already has {count} entries. Skipping seed.")
+
+
+def seed_amazon_products():
+    """Seed or enrich the approved Amazon product catalog."""
+    products = [
+        {
+            "title": "Snack BOX Gluten Free Healthy Care Package",
+            "description": "A practical gluten-free snack stash for travel days, offices, school bags, movie nights, road trips, and emergency backup food when safe options are hard to find.",
+            "url": "https://amzn.to/4fykY6E",
+            "image_url": "https://easygluten-free.com/wp-content/uploads/2025/12/81C3QPKYRaL._SL1500_-1.webp",
+            "keywords": "snacks snack box travel road trip office school emergency backup pantry individually wrapped hosting social",
+            "content_lanes": "product_watch,restaurant_travel_buzz,organization_life",
+            "price_tier": "affordable",
+            "priority_score": 1.15,
+            "last_used": "2026-03-17T09:02:55.962Z",
+        },
+        {
+            "title": "Bentgo Chill Max Lunch Box",
+            "description": "A compartment lunch box with a built-in chill layer for organized gluten-free lunches, safe snacks, dips, school days, work meals, picnics, and travel days.",
+            "url": "https://amzn.to/4xkVjF2",
+            "image_url": "https://easygluten-free.com/wp-content/uploads/2025/12/810iRItuBPL._AC_SL1500_-1.webp",
+            "keywords": "lunch box meal prep school work office travel picnic compartments snacks dips cold pack organized",
+            "content_lanes": "kitchen_gadget_lab,organization_life,restaurant_travel_buzz,product_watch",
+            "price_tier": "affordable",
+            "priority_score": 1.25,
+            "last_used": "2026-03-18T09:02:42.911Z",
+        },
+        {
+            "title": "Premium Silicone Reusable Food Storage Bags",
+            "description": "Reusable silicone bags for gluten-free snacks, leftovers, road trips, freezer prep, pantry organization, and low-waste kitchen systems.",
+            "url": "https://amzn.to/4ukEU0o",
+            "image_url": "https://easygluten-free.com/wp-content/uploads/2025/12/71vgltzzXwL._AC_SL1500_.webp",
+            "keywords": "storage bags reusable silicone freezer meal prep leftovers snacks pantry organization kitchen travel dishwasher safe",
+            "content_lanes": "organization_life,kitchen_gadget_lab,recipe_experiments,restaurant_travel_buzz",
+            "price_tier": "affordable",
+            "priority_score": 1.1,
+            "last_used": "2026-03-19T09:03:05.777Z",
+        },
+        {
+            "title": "Bob's Red Mill Gluten Free 1 to 1 Baking Flour",
+            "description": "A reliable gluten-free all-purpose flour for pancakes, muffins, cookies, quick breads, copycat recipes, substitutions, and practical baking experiments.",
+            "url": "https://amzn.to/49LV9w8",
+            "image_url": "https://easygluten-free.com/wp-content/uploads/2025/12/bobs.webp",
+            "keywords": "flour baking pancakes muffins cookies bread quick bread copycat recipe substitution gluten free flour blend",
+            "content_lanes": "recipe_experiments,bread_wars,product_watch,science_without_boring",
+            "price_tier": "affordable",
+            "priority_score": 1.2,
+            "last_used": "2026-03-20T09:02:53.225Z",
+        },
+    ]
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        inserted = 0
+        enriched = 0
+
+        for product in products:
+            cursor.execute(
+                """
+                SELECT product_id
+                FROM amazon_products
+                WHERE lower(trim(title)) = lower(trim(?))
+                LIMIT 1
+                """,
+                (product["title"],),
+            )
+            existing = cursor.fetchone()
+
+            if existing:
+                cursor.execute(
+                    """
+                    UPDATE amazon_products
+                    SET keywords = ?,
+                        content_lanes = ?,
+                        price_tier = ?,
+                        priority_score = ?
+                    WHERE product_id = ?
+                    """,
+                    (
+                        product["keywords"],
+                        product["content_lanes"],
+                        product["price_tier"],
+                        product["priority_score"],
+                        existing["product_id"],
+                    ),
+                )
+                enriched += 1
+                continue
+
+            cursor.execute(
+                """
+                INSERT INTO amazon_products (
+                    title,
+                    description,
+                    url,
+                    image_url,
+                    keywords,
+                    content_lanes,
+                    price_tier,
+                    priority_score,
+                    last_used
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    product["title"],
+                    product["description"],
+                    product["url"],
+                    product["image_url"],
+                    product["keywords"],
+                    product["content_lanes"],
+                    product["price_tier"],
+                    product["priority_score"],
+                    product["last_used"],
+                ),
+            )
+            inserted += 1
+
+        conn.commit()
+        print(f"Amazon products ready. Inserted {inserted}, enriched {enriched}.")
 
 
 if __name__ == "__main__":

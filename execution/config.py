@@ -41,6 +41,9 @@ WP_BASE_URL = os.getenv("WP_BASE_URL", "https://easygluten-free.com")
 WP_USERNAME = os.getenv("WP_USERNAME")
 WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD")
 
+# Affiliate links
+AMAZON_ASSOCIATE_TAG = os.getenv("AMAZON_ASSOCIATE_TAG", "").strip()
+
 # Settings
 SANDBOX_MODE = os.getenv("SANDBOX_MODE", "True").lower() == "true"
 DAILY_PIN_COUNT = 3

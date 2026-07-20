@@ -1,7 +1,9 @@
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from execution.config import PROMPTS_DIR, BLOG_TEMPLATE_PATH
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+from execution.config import AMAZON_ASSOCIATE_TAG, BLOG_TEMPLATE_PATH, PROMPTS_DIR
 from execution.db import get_connection
 from execution.models import BlogGenerationResponse
 from execution.utils.llm_client import LLMClient
@@ -14,18 +16,107 @@ logger = setup_logger("blog_generator")
 # Product rotation
 # ──────────────────────────────────────────────
 
-def get_next_product() -> dict | None:
-    """Return the Amazon product with the oldest last_used date."""
+def _tokenize(value: str | None) -> set[str]:
+    """Return normalized keywords from free text."""
+    if not value:
+        return set()
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", value.lower())
+        if len(token) > 2
+    }
+
+
+def _split_csv(value: str | None) -> set[str]:
+    """Return normalized comma-separated values."""
+    if not value:
+        return set()
+    return {
+        item.strip().lower()
+        for item in value.split(",")
+        if item.strip()
+    }
+
+
+def _score_product(product: dict, topic_tokens: set[str], content_lane: str | None) -> float:
+    """Score a product by lane fit, keyword overlap, and editorial priority."""
+    keywords = _tokenize(product.get("keywords"))
+    product_lanes = _split_csv(product.get("content_lanes"))
+    normalized_lane = (content_lane or "").strip().lower()
+
+    keyword_score = len(topic_tokens & keywords) * 2.0
+    lane_score = 8.0 if normalized_lane and normalized_lane in product_lanes else 0.0
+    affordable_score = 1.5 if (product.get("price_tier") or "").lower() == "affordable" else 0.0
+    priority_score = float(product.get("priority_score") or 1.0)
+
+    return (keyword_score + lane_score + affordable_score) * priority_score
+
+
+def _apply_amazon_associate_tag(url: str) -> str:
+    """Attach the configured Amazon Associates tag to direct Amazon links."""
+    if not AMAZON_ASSOCIATE_TAG:
+        return url
+
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if "amazon." not in host:
+        return url
+
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["tag"] = AMAZON_ASSOCIATE_TAG
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def get_relevant_product(
+    topic_title: str,
+    topic_description: str | None = None,
+    content_lane: str | None = None,
+) -> dict | None:
+    """Return the approved Amazon product that best matches the blog topic."""
+    topic_tokens = _tokenize(f"{topic_title} {topic_description or ''} {content_lane or ''}")
+
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT product_id, title, description, url, image_url, last_used
+            SELECT
+                product_id,
+                title,
+                description,
+                url,
+                image_url,
+                keywords,
+                content_lanes,
+                price_tier,
+                priority_score,
+                last_used
             FROM amazon_products
-            ORDER BY last_used ASC
-            LIMIT 1
         """)
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        products = [dict(row) for row in cursor.fetchall()]
+
+    if not products:
+        return None
+
+    scored_products = [
+        (_score_product(product, topic_tokens, content_lane), product)
+        for product in products
+    ]
+    best_score = max(score for score, _ in scored_products)
+
+    if best_score <= 0:
+        logger.info("No strong Amazon product match found. Falling back to oldest last_used.")
+        return sorted(products, key=lambda p: p.get("last_used") or "")[0]
+
+    candidates = [
+        product
+        for score, product in scored_products
+        if score == best_score
+    ]
+    return sorted(candidates, key=lambda p: p.get("last_used") or "")[0]
+
+
+def get_next_product() -> dict | None:
+    """Compatibility wrapper for older callers."""
+    return get_relevant_product("")
 
 
 def mark_product_used(product_id: int):
@@ -92,7 +183,7 @@ def fill_template(template: str, content: BlogGenerationResponse, product: dict)
     # Amazon product block (Make.com-style variables replaced with real data)
     html = html.replace("{{49.`1`}}", product["title"])
     html = html.replace("{{49.`2`}}", product["description"])
-    html = html.replace("{{49.`3`}}", product["url"])
+    html = html.replace("{{49.`3`}}", _apply_amazon_associate_tag(product["url"]))
     html = html.replace("{{49.`4`}}", product["image_url"])
 
     # Sanity check — warn if any placeholders remain unfilled
@@ -113,7 +204,7 @@ def generate_blog(pin_id: int, forced_title: str | None = None) -> dict | None:
     
     Steps:
     1. Load pin data from DB
-    2. Pick the Amazon product with the oldest last_used
+    2. Pick the most relevant approved Amazon product
     3. Call LLM to generate all blog content fields
     4. Fill the locked HTML template
     5. Save blog record to DB
@@ -126,7 +217,14 @@ def generate_blog(pin_id: int, forced_title: str | None = None) -> dict | None:
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT p.pin_id, p.title, p.description, p.image_path, i.content_type
+            SELECT
+                p.pin_id,
+                p.title,
+                p.description,
+                p.image_path,
+                i.content_type,
+                i.content_lane,
+                i.angle_type
             FROM generated_pins p
             LEFT JOIN content_ideas i ON p.idea_id = i.idea_id
             WHERE p.pin_id = ?
@@ -140,7 +238,11 @@ def generate_blog(pin_id: int, forced_title: str | None = None) -> dict | None:
     pin = dict(pin)
 
     # 2. Pick product
-    product = get_next_product()
+    product = get_relevant_product(
+        topic_title=pin["title"],
+        topic_description=pin["description"],
+        content_lane=pin.get("content_lane"),
+    )
     if not product:
         logger.error("No Amazon products available in DB. Run db.py to seed them.")
         return None

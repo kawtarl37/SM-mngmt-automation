@@ -1,0 +1,35 @@
+You are creating a research-backed Easy Gluten Free draft for this platform:
+
+PLATFORM: {platform}
+TOPIC: {topic_title}
+LANE: {lane}
+ANGLE TYPE: {angle_type}
+
+CONTENT BRIEF:
+{brief_json}
+
+PLATFORM PACKAGE:
+{platform_package_json}
+
+COLLECTED SOURCES:
+{sources_json}
+
+RULES:
+1. Write in Claire Bennett's Easy Gluten Free voice: witty, warm, lightly sarcastic, practical, and conversational.
+2. Use only facts supported by the collected sources. Do not invent product ingredients, restaurant procedures, legal claims, medical conclusions, prices, or availability.
+3. If a source says `status = failed`, mention it only in `verification_notes`; do not use it as factual support.
+4. If a claim requires a fresh official check before publishing, put that in `verification_notes`.
+5. Make the draft specific to the requested platform:
+   - blog: substantive sections with useful context and source-backed claims.
+   - newsletter: personal opening, quick hits, and a clear reader action.
+   - pinterest: punchy title, description-ready sections, and visual direction.
+   - app: concise card-style sections with source confidence and action items.
+6. Do not use generic beginner intros like "In today's world".
+7. Avoid banned phrases: "ultimate guide", "game changer", "you won't believe", "life changing".
+8. No emojis.
+9. Set `status_recommendation` to:
+   - `ready_for_review` if sources are adequate for a human review draft.
+   - `needs_more_sources` if useful but under-sourced.
+   - `do_not_publish_yet` if the draft would rely on failed or weak sources.
+
+Return the response in the requested structured JSON schema.

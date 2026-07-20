@@ -127,6 +127,28 @@ def ensure_research_schema() -> None:
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS content_drafts (
+                draft_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                brief_id INTEGER,
+                topic_title TEXT NOT NULL,
+                lane TEXT NOT NULL,
+                angle_type TEXT,
+                platform TEXT NOT NULL,
+                title TEXT NOT NULL,
+                dek TEXT,
+                content_json TEXT NOT NULL,
+                source_urls_json TEXT NOT NULL,
+                status TEXT DEFAULT 'pending_review',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                approved_at TIMESTAMP,
+                approved_by TEXT,
+                rejection_reason TEXT,
+                FOREIGN KEY(brief_id) REFERENCES content_briefs(brief_id)
+            )
+            """
+        )
         _ensure_columns(
             cursor,
             "research_sources",
@@ -134,6 +156,15 @@ def ensure_research_schema() -> None:
                 "snippet": "TEXT",
                 "published_at": "TIMESTAMP",
                 "external_id": "TEXT",
+            },
+        )
+        _ensure_columns(
+            cursor,
+            "content_drafts",
+            {
+                "approved_at": "TIMESTAMP",
+                "approved_by": "TEXT",
+                "rejection_reason": "TEXT",
             },
         )
         conn.commit()

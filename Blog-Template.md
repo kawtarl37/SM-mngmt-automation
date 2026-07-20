@@ -67,6 +67,131 @@ id,title,description,url,image_url,last_used
   <div class="egf-reading-progress-bar"></div>
 </div>
 
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&display=swap');
+
+  .egf-blog-2025-wrapper {
+    color: #1f2933;
+    font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size: 19px;
+    line-height: 1.75;
+  }
+
+  .egf-blog-2025-wrapper p,
+  .egf-blog-2025-wrapper li {
+    font-size: 1rem;
+    line-height: 1.75;
+  }
+
+  .egf-blog-2025-wrapper h1,
+  .egf-blog-2025-wrapper h2,
+  .egf-blog-2025-wrapper h3,
+  .egf-blog-2025-wrapper h4,
+  .egf-blog-2025-wrapper .egf-btn-2025,
+  .egf-blog-2025-wrapper .egf-eyebrow-2025,
+  .egf-blog-2025-wrapper summary {
+    font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  .egf-article-section-2025,
+  .egf-section-lead-2025,
+  .egf-toc-section-2025,
+  .egf-key-takeaways-2025,
+  .egf-cta-section-2025 {
+    max-width: 820px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .egf-article-section-2025 h1 {
+    color: #17212b;
+    font-size: clamp(1.75rem, 1.35rem + 1.2vw, 2.35rem);
+    line-height: 1.18;
+    margin-bottom: 0.85em;
+  }
+
+  .egf-btn-2025 {
+    align-items: center;
+    display: inline-flex;
+    font-size: 1rem;
+    font-weight: 800;
+    justify-content: center;
+    min-height: 48px;
+    padding: 0.8rem 1.25rem;
+    text-decoration: none;
+  }
+
+  .egf-promo-planner-2025 {
+    align-items: center;
+    background: #f4eee7;
+    display: grid;
+    gap: 1.5rem;
+    grid-template-columns: minmax(0, 1.15fr) minmax(180px, 0.85fr);
+    overflow: hidden;
+    padding: clamp(1.5rem, 2.5vw, 2.4rem);
+  }
+
+  .egf-planner-badge-2025 {
+    background: #fff7ed;
+    border: 1px solid rgba(195, 111, 41, 0.24);
+    border-radius: 999px;
+    color: #8a4a18;
+    display: inline-flex;
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 0.82rem;
+    font-weight: 800;
+    margin-bottom: 0.85rem;
+    padding: 0.35rem 0.7rem;
+  }
+
+  .egf-promo-planner-2025 h3 {
+    font-size: clamp(1.45rem, 1.1rem + 1vw, 2rem);
+    line-height: 1.15;
+    margin: 0 0 0.7rem;
+  }
+
+  .egf-promo-planner-2025 p {
+    margin-bottom: 1rem;
+  }
+
+  .egf-promo-planner-2025 ul {
+    display: grid;
+    gap: 0.35rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .egf-promo-planner-2025__image img {
+    display: block;
+    height: auto;
+    margin-left: auto;
+    max-width: 320px;
+    width: 100%;
+  }
+
+  .egf-affiliate-note-2025 {
+    color: #58616d;
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    margin-top: 0.85rem;
+  }
+
+  @media (max-width: 720px) {
+    .egf-blog-2025-wrapper {
+      font-size: 18px;
+    }
+
+    .egf-promo-planner-2025 {
+      grid-template-columns: 1fr;
+    }
+
+    .egf-promo-planner-2025__image img {
+      margin-left: 0;
+      max-width: 260px;
+    }
+  }
+</style>
+
 <main class="egf-blog-2025-wrapper">
 
   <!-- HERO -->
@@ -133,13 +258,21 @@ id,title,description,url,image_url,last_used
     <h1>1. [SECTION_1_TITLE]</h1>
     [SECTION_1_CONTENT]
     <hr class="egf-divider-2025">
-    <div class="egf-card-2025 egf-promo-ebook-2025">
-      <h3>Need Help Staying Organized?</h3>
-      <ul>
-        <li>Plan meals & shopping</li>
-        <li>Stay on track with ease</li>
-      </ul>
-      <a class="egf-btn-2025" href="#">See Planner</a>
+    <div class="egf-card-2025 egf-promo-ebook-2025 egf-promo-planner-2025">
+      <div class="egf-promo-planner-2025__content">
+        <span class="egf-planner-badge-2025">80% off for the next 2 months</span>
+        <h3>Make Gluten-Free Weeks Feel Less Chaotic</h3>
+        <p>Use the Easy Gluten-Free Planner to map meals, shopping lists, pantry backups, snacks, and freezer saves before the week starts bossing you around.</p>
+        <ul>
+          <li>Plan meals, groceries, and safe backup options in one place</li>
+          <li>Keep track of family favorites, pantry gaps, and repeat buys</li>
+          <li>Reduce last-minute "what can I actually eat?" decisions</li>
+        </ul>
+        <a class="egf-btn-2025" href="https://glutenfreeeasy.gumroad.com/l/jhbudh" target="_blank" rel="noopener sponsored">Buy the Planner</a>
+      </div>
+      <div class="egf-promo-planner-2025__image">
+        <img src="https://easygluten-free.com/wp-content/uploads/2025/11/ebook-png.png" alt="Easy Gluten-Free Planner cover">
+      </div>
     </div>
   </section>
 
@@ -153,7 +286,8 @@ id,title,description,url,image_url,last_used
       <div class="egf-split-card-2025__content">
         <h2>{{49.`1`}}</h2>
         <p>{{49.`2`}}</p>
-        <a class="egf-btn-2025" href="{{49.`3`}}">→ View on Amazon</a>
+        <a class="egf-btn-2025" href="{{49.`3`}}" target="_blank" rel="nofollow sponsored noopener">View on Amazon</a>
+        <p class="egf-affiliate-note-2025">As an Amazon Associate, Easy Gluten-Free may earn from qualifying purchases. We only feature products that fit the article topic.</p>
       </div>
       <div class="egf-split-card-2025__image">
         <img src="{{49.`4`}}" alt="{{49.`1`}}">
