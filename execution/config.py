@@ -23,15 +23,8 @@ PINTEREST_BOARD_ID = os.getenv("PINTEREST_BOARD_ID")
 PINTEREST_SANDBOX_TOKEN = os.getenv("PINTEREST_SANDBOX_TOKEN") or os.getenv("PINTEREST_ACCESS_TOKEN")
 PINTEREST_SANDBOX_BOARD_ID = os.getenv("PINTEREST_SANDBOX_BOARD_ID") or os.getenv("PINTEREST_BOARD_ID")
 
-# Reddit Scraping
-REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "EGF-Automation/1.0 (Contact: user@easygluten-free.com)")
-SUBREDDITS = [
-    "glutenfree",
-    "glutenfreebaking",
-    "glutenfreecooking",
-    "glutenfreerecipes",
-    "celiac"
-]
+# Brave Search API (web-search research collector)
+BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY")
 
 # WordPress (recipe crawling)
 WORDPRESS_URL = os.getenv("WORDPRESS_URL", "https://easygluten-free.com/")
@@ -46,8 +39,7 @@ AMAZON_ASSOCIATE_TAG = os.getenv("AMAZON_ASSOCIATE_TAG", "").strip()
 
 # Settings
 SANDBOX_MODE = os.getenv("SANDBOX_MODE", "True").lower() == "true"
-DAILY_PIN_COUNT = 3
-DAILY_IDEA_GENERATION_COUNT = 20
+LANE_ROTATION_COUNT = int(os.getenv("LANE_ROTATION_COUNT", "6"))  # Lanes covered per automated rotation run
 TEXT_PREFERENCE_MODEL = "gpt-4o-mini"  # Primary model
 IMAGE_GENERATION_PROVIDER = os.getenv("IMAGE_GENERATION_PROVIDER", "openai").lower()
 IMAGE_GENERATION_MODEL = os.getenv("IMAGE_GENERATION_MODEL", "gpt-image-2")

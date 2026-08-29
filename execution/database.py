@@ -1,6 +1,6 @@
 import os
 import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, Date, Float
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, Date
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from execution.config import DB_PATH
 
@@ -60,19 +60,6 @@ class PublishSchedule(Base):
     completed_at = Column(DateTime)
     
     pin = relationship("GeneratedPin", back_populates="schedules")
-
-class TrendyTopic(Base):
-    __tablename__ = "trendy_topics"
-    topic_id = Column(Integer, primary_key=True, autoincrement=True)
-    title = Column(String, nullable=False)
-    details = Column(Text, nullable=False)
-    source = Column(String, nullable=False)
-    relevance_score = Column(Float, default=0.0)
-    content_lane = Column(String)
-    angle_type = Column(String)
-    freshness_hook = Column(Text)
-    status = Column(String, default='pending')
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 def get_db():
     db = SessionLocal()

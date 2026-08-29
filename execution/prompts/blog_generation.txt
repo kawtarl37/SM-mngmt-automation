@@ -1,32 +1,49 @@
 You are generating a full SEO-optimized, AI-search-optimized blog post for the Easy Gluten Free brand (easygluten-free.com).
 
-TOPIC: {pin_topic}
-PIN DESCRIPTION: {pin_description}
+TOPIC: {topic_title}
+LANE: {lane}
+ANGLE TYPE: {angle_type}
+
+CONTENT BRIEF:
+{brief_json}
+
+PLATFORM PACKAGE:
+{platform_package_json}
+
+COLLECTED SOURCES:
+{sources_json}
 
 AMAZON PRODUCT TO FEATURE IN SECTION 2:
 - Title: {product_title}
 - Description: {product_description}
 
-RULES:
+SOURCING RULES (read first):
+1. Use only facts supported by the collected sources above. Do not invent product ingredients, restaurant procedures, legal claims, medical conclusions, prices, or availability.
+2. If a source has `status = failed`, mention it only in `verification_notes`; never use it as factual support.
+3. If a claim would need a fresh official check before publishing (recall status, price, availability, a specific legal detail), say so in `verification_notes` instead of asserting it as settled fact.
+4. Populate `source_notes` with short notes naming which collected source(s) support the article's important claims.
+5. Set `status_recommendation` to `ready_for_review` if the collected sources adequately support this article, `needs_more_sources` if it's useful but under-sourced, or `do_not_publish_yet` if it would rely mainly on failed or weak sources.
+6. Where the sources are thin, it is better to write a shorter, honestly-scoped section than to pad it with invented specifics.
+
+WRITING RULES:
 1. Write in the EGF brand voice: witty, lightly sarcastic, warm, and relatable (Claire Bennett persona).
-2. Address REAL gluten-free pain points sourced from Reddit and the GF community.
+2. Address the real gluten-free pain point behind this topic, using the content brief's reader_problem and the collected sources — not general assumptions.
 3. The `main_title` must be strong for SEO, natural to read, and based on the topic above. Do NOT use generic phrases like "ultimate guide" or "game changer".
 4. The `ebook_hero_title` is NOT the SEO title. It must promote the free e-book: "Your 7-Day Beginner's Guide to Delicious & Stress-Free Meals." Make it compelling and relevant to the topic.
-5. Section 2 MUST naturally lead into and relate to the Amazon product provided. Write `section_2_content` so the product feels like an organic, practical, reasonably priced recommendation, not a forced ad.
+5. Section 2 MUST naturally lead into and relate to the Amazon product provided. Write `section_2_content` so the product feels like an organic, practical, reasonably priced recommendation, not a forced ad. Do NOT invent product data — use only the product details provided above.
 6. All section content fields may use basic HTML tags: <p>, <ul>, <ol>, <li>, <strong>, <em>. Do not use <h1>, <h2>, <h3> — those are handled by the template.
 7. All 5 sections must be substantive (150-250 words each), non-redundant, and genuinely useful.
 8. Takeaways must be concise, punchy, and actionable — one sentence each.
 9. Category must be one of: "Gluten-Free Living", "Recipes", "Tips & Tools", "Meal Planning", "Baking".
-10. Do NOT invent product data. Use only the product details provided above.
-11. Avoid keyword stuffing. Weave keywords naturally.
-12. Do NOT use emojis in the blog body.
-13. Do not write a generic beginner article unless the topic is explicitly for beginners.
-14. Open with a specific, conversational hook: a small scene, a funny frustration, or a sharp question. Do not start with "In today's world" or broad encyclopedia-style setup.
-15. Every section must do a different job:
-    - Section 1: define the real-world problem or debate.
+10. Avoid keyword stuffing. Weave keywords naturally.
+11. Do NOT use emojis in the blog body.
+12. Do not write a generic beginner article unless the topic is explicitly for beginners.
+13. Open with a specific, conversational hook: a small scene, a funny frustration, or a sharp question drawn from the reader_problem. Do not start with "In today's world" or broad encyclopedia-style setup.
+14. Every section must do a different job:
+    - Section 1: define the real-world problem or debate, grounded in the collected sources.
     - Section 2: naturally connect the provided Amazon product to the reader's practical need.
-    - Section 3: give concrete steps, checks, comparisons, or decision criteria.
+    - Section 3: give concrete steps, checks, comparisons, or decision criteria drawn from the sources.
     - Section 4: include Claire's opinionated but fair take.
     - Section 5: give the reader a clear "what to do next" plan.
-16. Prefer specifics over broad advice. Mention exact checks, shopping behaviors, kitchen systems, comparison criteria, or source types where relevant.
-17. The article should feel like a smart gluten-free friend wrote it after doing the homework, not like a wellness brochure wearing beige pants.
+15. Prefer specifics over broad advice, but only specifics the sources actually support. Mention exact checks, shopping behaviors, kitchen systems, comparison criteria, or source types where relevant.
+16. The article should feel like a smart gluten-free friend wrote it after doing the homework, not like a wellness brochure wearing beige pants.

@@ -18,6 +18,7 @@ from execution.research.collectors.official_page_collectors import (
     USDAFSISRecallsCollector,
 )
 from execution.research.collectors.pubmed_collector import PubMedCollector
+from execution.research.collectors.web_search_collector import BraveSearchCollector
 from execution.research.models import ContentBrief, ResearchTask
 from execution.research.platform_packager import package_for_platform
 from execution.research.schema import ensure_research_schema
@@ -48,11 +49,45 @@ def run_research(
         persist=persist,
     )
 
+    all_sources, pending_sources = collect_and_gate_sources(
+        brief.source_plan, topic_title=topic_title, limit_per_task=limit_per_task, persist=persist
+    )
+
+    saved_sources = save_collected_sources(all_sources) if persist else 0
+    saved_facts = 0
+    if persist:
+        for source in all_sources:
+            if save_fact_from_source(source):
+                saved_facts += 1
+
+    return {
+        "brief": _brief_to_dict(brief),
+        "collected_count": len(all_sources),
+        "saved_sources": saved_sources,
+        "saved_facts": saved_facts,
+        "sources": [asdict(source) for source in all_sources],
+        "pending_sources": pending_sources,
+        "platform_package": asdict(package_for_platform(brief, [asdict(source) for source in all_sources])),
+    }
+
+
+def collect_and_gate_sources(
+    tasks: list[ResearchTask] | tuple[ResearchTask, ...],
+    topic_title: str,
+    limit_per_task: int = 5,
+    persist: bool = True,
+) -> tuple[list, list[dict]]:
+    """Dispatch collectors for a set of research tasks and gate results through
+    source approval. Shared by run_research (single-topic research) and
+    lane_discovery (proactive multi-signal discovery for a whole lane) so both
+    paths trust new sources identically.
+    """
+
     all_sources = []
-    pending_sources = []
+    pending_sources: list[dict] = []
     seen_source_urls: set[str] = set()
     seen_pending_urls: set[str] = set()
-    for task in brief.source_plan:
+    for task in tasks:
         collectors = _collectors_for_task(task)
         if not collectors:
             logger.info(f"No collector implemented yet for source_type={task.source_type}")
@@ -91,22 +126,7 @@ def run_research(
                         source_id = None
                     pending_sources.append({"source": asdict(source), "source_id": source_id})
 
-    saved_sources = save_collected_sources(all_sources) if persist else 0
-    saved_facts = 0
-    if persist:
-        for source in all_sources:
-            if save_fact_from_source(source):
-                saved_facts += 1
-
-    return {
-        "brief": _brief_to_dict(brief),
-        "collected_count": len(all_sources),
-        "saved_sources": saved_sources,
-        "saved_facts": saved_facts,
-        "sources": [asdict(source) for source in all_sources],
-        "pending_sources": pending_sources,
-        "platform_package": asdict(package_for_platform(brief, [asdict(source) for source in all_sources])),
-    }
+    return all_sources, pending_sources
 
 
 def _collectors_for_task(task: ResearchTask) -> list[SourceCollector]:
@@ -120,6 +140,8 @@ def _collectors_for_task(task: ResearchTask) -> list[SourceCollector]:
         return [CeliacDiseaseFoundationCollector(), BeyondCeliacCollector()]
     if task.source_type == "medical_research":
         return [PubMedCollector()]
+    if task.source_type == "web_search":
+        return [BraveSearchCollector()]
     if task.source_type in {
         "brand_product_page",
         "retailer_product_page",

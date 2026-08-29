@@ -10,44 +10,46 @@ LANE_SOURCE_TYPES: dict[str, tuple[tuple[str, str], ...]] = {
         ("official_recall_page", "Check official recall and safety alert pages for timely allergen or gluten-related issues."),
         ("official_api", "Search structured enforcement data for undeclared wheat, allergens, gluten, and labeling problems."),
         ("certification_body", "Verify certification context and gluten-free standard language."),
+        ("web_search", "Catch recent news coverage of the labeling change or recall that official pages haven't indexed yet."),
     ),
     "product_watch": (
         ("brand_product_page", "Verify product details, ingredients, allergen statements, and launch claims."),
         ("retailer_product_page", "Check availability, pricing signals, reviews, and supermarket discovery."),
-        ("community_discussion", "Look for real-user chatter and recurring complaints or praise."),
+        ("web_search", "Discover the specific product/brand page and recent reviews or launch coverage live."),
     ),
     "comparison": (
         ("brand_product_page", "Collect official product details for each compared item."),
         ("retailer_product_page", "Compare reviews, price, availability, and specifications."),
-        ("community_discussion", "Identify texture, taste, and practical use complaints."),
+        ("web_search", "Find independent taste-test/comparison coverage and current pricing across retailers."),
     ),
     "restaurants_travel": (
         ("restaurant_allergen_page", "Verify allergen menu details and official gluten-free claims."),
-        ("community_discussion", "Collect traveler and diner pain points to frame the story."),
+        ("web_search", "Find recent diner/traveler reporting on this chain, city, or route."),
     ),
     "gadgets_tools": (
         ("tool_product_page", "Verify dimensions, materials, use cases, and manufacturer claims."),
         ("retailer_product_page", "Check reviews, price, and availability."),
-        ("community_discussion", "Find real kitchen use cases and cross-contact concerns."),
+        ("web_search", "Find independent reviews and real kitchen use cases for the specific tool."),
     ),
     "apps_digital": (
         ("app_review_page", "Verify app features, reviews, update history, and pricing."),
-        ("community_discussion", "Find real-user trust issues, missing features, and useful workflows."),
+        ("web_search", "Find recent user reviews, update notes, and trust/feature complaints."),
     ),
     "organization_life": (
-        ("community_discussion", "Collect lived problems and routines from gluten-free households."),
+        ("web_search", "Find real routines, systems, and product roundups gluten-free households are actually using."),
         ("tool_product_page", "Find relevant storage, lunch, freezer, and travel tools where useful."),
     ),
     "recipe_experiments": (
-        ("community_discussion", "Find what people are trying, craving, or struggling to recreate gluten-free."),
+        ("web_search", "Find what people are trying, craving, or struggling to recreate gluten-free right now."),
         ("brand_product_page", "Verify product ingredients and recommended use if a packaged product is involved."),
     ),
     "science_health": (
         ("medical_research", "Find current studies or review papers relevant to the topic."),
         ("gluten_free_organization", "Find patient-facing summaries and practical context."),
+        ("web_search", "Catch recent science journalism or org explainers not yet indexed in PubMed."),
     ),
     "community_questions": (
-        ("community_discussion", "Capture the real question, emotional context, and recurring advice patterns."),
+        ("web_search", "Capture the real question, emotional context, and recurring advice patterns."),
         ("gluten_free_organization", "Verify any health or safety claims before writing."),
     ),
 }
@@ -100,7 +102,31 @@ def _build_query(topic_title: str, lane: str, source_type: str) -> str:
         return f"{topic_title} app reviews gluten free scanner"
     if source_type in {"brand_product_page", "retailer_product_page", "tool_product_page"}:
         return f"{topic_title} gluten free product review ingredients"
+    if source_type == "web_search":
+        return _web_search_query(topic_title, lane)
     if lane == "comparison":
         return f"{topic_title} comparison reviews gluten free"
     return f"{topic_title} gluten free discussion"
+
+
+def _web_search_query(topic_title: str, lane: str) -> str:
+    """Seed query for the live web-search collector, tuned per lane."""
+
+    if lane == "laws_labeling":
+        return f"{topic_title} gluten-free news"
+    if lane in {"product_watch", "comparison"}:
+        return f"{topic_title} gluten free review"
+    if lane == "restaurants_travel":
+        return f"{topic_title} gluten free menu OR travel"
+    if lane == "gadgets_tools":
+        return f"{topic_title} gluten free kitchen review"
+    if lane == "apps_digital":
+        return f"{topic_title} app review gluten free"
+    if lane == "organization_life":
+        return f"{topic_title} gluten free household system"
+    if lane == "recipe_experiments":
+        return f"{topic_title} gluten free recipe"
+    if lane == "science_health":
+        return f"{topic_title} celiac gluten-free news"
+    return f"{topic_title} gluten free"
 

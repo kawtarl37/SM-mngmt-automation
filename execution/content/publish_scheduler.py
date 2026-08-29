@@ -18,7 +18,7 @@ from execution.config import (
     PUBLISH_START_HOUR,
 )
 from execution.db import get_connection
-from execution.content.blog_generator import generate_blog
+from execution.research.blog_draft_generator import generate_research_backed_blog
 from execution.content.wordpress_publisher import publish_blog_to_wp
 from execution.content.pinterest_publisher import post_pin_to_pinterest
 from execution.utils.logger import setup_logger
@@ -168,7 +168,7 @@ def execute_single_publish(pin_id: int):
             blog_id = blog_row["blog_id"]
             logger.info(f"Using existing blog_id={blog_id} for pin_id={pin_id}")
         else:
-            blog = generate_blog(pin_id)
+            blog = generate_research_backed_blog(pin_id)
             if not blog:
                 raise RuntimeError("Blog generation returned None.")
             blog_id = blog["blog_id"]

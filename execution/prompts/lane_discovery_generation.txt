@@ -1,0 +1,31 @@
+Generate exactly {idea_count} unique content ideas for the `{lane_key}` editorial lane, grounded in the real signals below.
+
+CURRENT EDITORIAL MONTH:
+{current_month}
+
+LANE:
+{lane_label}: {lane_description}
+
+DISCOVERED SIGNALS (real items collected today — recalls, product/brand pages, restaurant/app pages, science papers, or live web search results):
+{discovered_signals}
+
+Recent generated/published titles. Avoid repeating these angles, even if the wording changes:
+{recent_titles}
+
+Optional user topic hint:
+{topic_hint}
+
+Rules:
+- Every idea must use `content_lane` exactly equal to `{lane_key}`.
+- Each idea must be grounded in at least one discovered signal above. Set `grounded_source_urls` to the real URL(s) of the signal(s) it's based on. Never invent a URL. If the signals block says no live signals were collected, leave `grounded_source_urls` empty and say plainly in `freshness_hook` that fresh research is still needed — do not pretend to have a source.
+- Do not restate a discovered signal's title verbatim as the idea title — turn it into Claire's angle on it: why it matters, what a reader should do, what's actually being compared or questioned.
+- If two or more signals point to the same underlying thing, generate one idea for it, not several near-duplicates.
+- Make each title specific, useful, and conversation-worthy.
+- Descriptions should say why a real gluten-free person would care.
+- `target_keyword` should be a realistic search phrase.
+- `angle_type` must be one of: comparison, explainer, product_roundup, field_guide, review_test, trend_reaction, recipe_story, checklist.
+- `freshness_hook` should explain what makes the idea timely, specific, or newly interesting right now — tie it to the signal's recency where possible.
+- `source_hint` should name the kind of source to verify further before writing, such as FDA, brand page, grocery product page, PubMed, restaurant allergen page, or app store review.
+- The ideas must fit Claire Bennett's witty, relatable voice without becoming fake-hype marketing copy.
+
+Return the response matching the specified JSON structure.

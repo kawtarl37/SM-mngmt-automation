@@ -1,15 +1,19 @@
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from execution.config import AMAZON_ASSOCIATE_TAG, BLOG_TEMPLATE_PATH, PROMPTS_DIR
+from execution.config import AMAZON_ASSOCIATE_TAG, BLOG_TEMPLATE_PATH
 from execution.db import get_connection
 from execution.models import BlogGenerationResponse
-from execution.utils.llm_client import LLMClient
 from execution.utils.logger import setup_logger
 
 logger = setup_logger("blog_generator")
+
+# NOTE: the ungrounded generate_blog() entrypoint that used to live here has
+# been replaced by execution.research.blog_draft_generator, which runs real
+# research before writing instead of an LLM call from a title + caption
+# alone. This module now only keeps the reusable template/product utilities
+# both the old and new paths share.
 
 
 # ──────────────────────────────────────────────
@@ -192,128 +196,3 @@ def fill_template(template: str, content: BlogGenerationResponse, product: dict)
         logger.warning(f"Unfilled placeholders detected: {remaining}")
 
     return html
-
-
-# ──────────────────────────────────────────────
-# Main entrypoint
-# ──────────────────────────────────────────────
-
-def generate_blog(pin_id: int, forced_title: str | None = None) -> dict | None:
-    """
-    Generate a complete blog HTML from an approved pin.
-    
-    Steps:
-    1. Load pin data from DB
-    2. Pick the most relevant approved Amazon product
-    3. Call LLM to generate all blog content fields
-    4. Fill the locked HTML template
-    5. Save blog record to DB
-    6. Mark product as used
-    Returns the saved blog record dict, or None on failure.
-    """
-    logger.info(f"Starting blog generation for pin_id={pin_id}")
-
-    # 1. Load pin data
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT
-                p.pin_id,
-                p.title,
-                p.description,
-                p.image_path,
-                i.content_type,
-                i.content_lane,
-                i.angle_type
-            FROM generated_pins p
-            LEFT JOIN content_ideas i ON p.idea_id = i.idea_id
-            WHERE p.pin_id = ?
-        """, (pin_id,))
-        pin = cursor.fetchone()
-
-    if not pin:
-        logger.error(f"Pin {pin_id} not found in DB.")
-        return None
-
-    pin = dict(pin)
-
-    # 2. Pick product
-    product = get_relevant_product(
-        topic_title=pin["title"],
-        topic_description=pin["description"],
-        content_lane=pin.get("content_lane"),
-    )
-    if not product:
-        logger.error("No Amazon products available in DB. Run db.py to seed them.")
-        return None
-
-    logger.info(f"Selected product: {product['title']} (last_used: {product['last_used']})")
-
-    # 3. Load prompts
-    try:
-        system_prompt = (PROMPTS_DIR / "brand_system_prompt.txt").read_text(encoding="utf-8")
-        user_prompt_template = (PROMPTS_DIR / "blog_generation.txt").read_text(encoding="utf-8")
-    except Exception as e:
-        logger.error(f"Failed to load blog prompt templates: {e}")
-        return None
-
-    user_prompt = user_prompt_template.format(
-        pin_topic=pin["title"],
-        pin_description=pin["description"],
-        product_title=product["title"],
-        product_description=product["description"],
-    )
-    if forced_title:
-        user_prompt += (
-            "\n\nLOCKED BLOG TITLE:\n"
-            f"{forced_title}\n\n"
-            "Use this exact text for `main_title`. Do not rewrite, expand, shorten, or retitle it."
-        )
-
-    # 4. Call LLM
-    client = LLMClient()
-    try:
-        content: BlogGenerationResponse = client.generate_structured(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            response_format=BlogGenerationResponse,
-            task_name="blog_generation"
-        )
-        if forced_title:
-            content.main_title = forced_title
-    except Exception as e:
-        logger.error(f"LLM call failed for blog generation: {e}")
-        return None
-
-    # 5. Fill HTML template
-    try:
-        template_html = load_html_template()
-        final_html = fill_template(template_html, content, product)
-    except Exception as e:
-        logger.error(f"Failed to fill HTML template: {e}")
-        return None
-
-    # 6. Save to blogs table
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO blogs (pin_id, title, html_content, category, product_id, status)
-            VALUES (?, ?, ?, ?, ?, 'generated')
-        """, (pin_id, content.main_title, final_html, content.category, product["product_id"]))
-        blog_id = cursor.lastrowid
-        conn.commit()
-
-    logger.info(f"Blog saved to DB with blog_id={blog_id}")
-
-    # 7. Mark product as used
-    mark_product_used(product["product_id"])
-
-    return {
-        "blog_id": blog_id,
-        "pin_id": pin_id,
-        "title": content.main_title,
-        "category": content.category,
-        "html_content": final_html,
-        "product_id": product["product_id"],
-        "image_path": pin["image_path"],
-    }

@@ -2,8 +2,15 @@
 
 ## Purpose
 
-This directive governs the upgraded topic and blog ideation system for Easy Gluten Free.
-The goal is to stop repetitive generic topics and produce blog ideas that are:
+This directive governs the **sole** topic discovery and content-generation engine for Easy Gluten Free.
+It replaced the old Reddit/PubMed trend-scrape pipeline (`reddit_scraper.py`, `medical_articles_scraper.py`,
+`trend_analyzer.py`, `trend_synthesizer.py`, the `trend_topics`/`trendy_topics` tables, and the dashboard's
+old "Trends & Blog Gen" / "Pending Review" / "Publish Queue" tabs) and the old broad, non-lane-scoped idea
+pipeline (`idea_generator.py`, `idea_scorer.py`, `pin_assembler.py`) — both retired 2026-08-29 because they
+produced blog posts from a title and a 160-character caption with no real source text behind them, despite
+claiming to be "sourced from Reddit and the GF community."
+
+The goal is to produce blog/pin/newsletter ideas and content that are:
 
 - timely
 - specific
@@ -11,9 +18,11 @@ The goal is to stop repetitive generic topics and produce blog ideas that are:
 - conversational
 - funny in Claire's voice
 - varied across editorial lanes
-- grounded in sources that can be verified before publishing
+- grounded in sources that can be verified before publishing, discovered live rather than pre-written
 
-This pipeline complements `scrape_and_synthesize_trends.md` and `generate_and_publish_blog.md`.
+This directive supersedes `generate_and_publish_blog.md`'s blog-generation section — publishing mechanics
+(WordPress/Pinterest API calls) documented there still apply; how the blog/pin content itself gets written
+does not.
 
 The same topic intelligence should feed multiple platforms:
 
@@ -113,40 +122,27 @@ The current implementation stores these signals through:
 
 ## Current Implementation
 
-### Generation inputs
+### Discovery-grounded idea generation
 
-`execution/intelligence/idea_generator.py` now sends the LLM:
-
-- current editorial month
-- recent trend context
-- existing recipe titles
-- recent generated/published topic memory
-- the editorial lane taxonomy
-
-### Trend synthesis
-
-`execution/intelligence/trend_synthesizer.py` now asks for:
-
-- `content_lane`
-- `angle_type`
-- `freshness_hook`
-
-These fields are saved to `trendy_topics`.
-
-### Idea generation
-
-`execution/intelligence/idea_generator.py` now asks for:
+`execution/editorial/lane_discovery.py::discover_lane_topics(lane_key, ...)` is the only idea-generation path.
+Unlike the retired `idea_generator.py`, it does not brainstorm from the lane taxonomy alone: it first runs
+real research collectors across the lane's normal source mix (`discover_lane_signals`, reusing the same
+collector dispatch as single-topic research) to gather current raw signals — recalls, product/brand pages,
+restaurant/app pages, science papers, or live web search results — then asks the LLM to turn those specific
+signals into ideas via `execution/prompts/lane_discovery_generation.txt`. Each idea asks for:
 
 - `content_lane`
 - `angle_type`
 - `freshness_hook`
 - `source_hint`
+- `grounded_source_urls` — the real discovered URL(s) the idea is actually based on; empty only when no live
+  signals were collected, in which case the idea must say so plainly rather than inventing a source
 
 These fields are saved to `content_ideas`.
 
 ### Scoring
 
-`execution/intelligence/idea_scorer.py` now boosts:
+`execution/editorial/scoring.py::EditorialScorer` boosts:
 
 - freshness
 - novelty
@@ -154,7 +150,8 @@ These fields are saved to `content_ideas`.
 - entertainment value
 - lane diversity
 
-It also selects diverse top ideas where possible.
+`execution/pipeline_runner.py::run_lane_rotation` (see "Automated Lane Rotation" below) uses this scorer to
+pick the top idea per lane it covers.
 
 ---
 
@@ -288,6 +285,21 @@ Current implemented collectors:
 - `tool_product_page`: approved kitchen tool/product pages
 - `app_review_page`: approved app/digital tool pages
 - `trend_planning_tool`: approved trend-planning tools
+- `web_search`: live discovery via the Brave Web Search API (`BraveSearchCollector`,
+  `execution/research/collectors/web_search_collector.py`). This is what lets product_watch, comparison,
+  restaurants_travel, gadgets_tools, apps_digital, organization_life, recipe_experiments, and
+  community_questions find brand-new pages instead of depending entirely on a manually pre-approved priority
+  list. Requires `BRAVE_SEARCH_API_KEY` in `.env`; without it the collector returns a single `status=failed`
+  record explaining what to configure, so the rest of the pipeline degrades gracefully rather than crashing.
+  Every result still passes through the normal `is_source_approved` / `propose_source` gate — a first-time
+  domain still requires human approval in the dashboard before its facts are trusted, regardless of the
+  domain-tier credibility heuristic the collector assigns it.
+  **Why Brave, not Google**: Google Custom Search JSON API is closed to new customers as of 2026, and
+  Google Programmable Search no longer offers whole-web search to newly created engines (capped to a fixed
+  list of domains specified at creation) — see the 2026-08-29 Learnings entry below. Brave's Web Search API
+  still does true open web search with no domain list required. It no longer has a fully free tier either
+  (as of Feb 2026): sign-up requires a card on file, ~$5/month in credits (roughly 1,000 queries), then
+  billed per query — comfortably covers this project's low volume (a handful of lane-rotation runs/week).
 
 Collectors save normalized records into `research_sources`.
 When a fetched source has a usable snippet, the runner creates a conservative `research_facts` entry using the source title and snippet as evidence.
@@ -458,3 +470,65 @@ Imported user-priority sources are marked:
 - `added_by = 'user_priority_list'`
 
 This is intentional: a source list explicitly supplied by the user is treated as trusted. Future discovered sources still go through the notification and approval gate.
+
+---
+
+## Research-Backed Blog Generation
+
+Blog generation is source-cited, the same way newsletter/pinterest/app drafts already are.
+`execution/research/blog_draft_generator.py`:
+
+- `generate_blog_content(topic_title, ...)` runs `run_research(..., platform="blog")` for a real brief +
+  collected sources, picks the Amazon product, and calls the LLM with `execution/prompts/blog_generation.txt`
+  (rewritten to require facts to come from the collected sources, mirroring `platform_draft_generation.txt`'s
+  discipline) — returns content, the chosen product, and the filled locked `Blog-Template.md` HTML.
+- `generate_research_backed_blog(pin_id, ...)` wraps the above for a real pin and saves the result into the
+  `blogs` table — the drop-in replacement for the old, ungrounded `execution.content.blog_generator.generate_blog()`.
+
+`BlogGenerationResponse` (`execution/models.py`) carries `source_notes`, `verification_notes`, and
+`status_recommendation` (`ready_for_review` / `needs_more_sources` / `do_not_publish_yet`) so a reviewer sees
+a sourcing-confidence flag in the dashboard before clicking Publish — the same signal the research pipeline
+already surfaces for newsletter/pinterest drafts.
+
+`execution/content/blog_generator.py` still exists but only for its reusable utilities (`get_relevant_product`,
+`mark_product_used`, `load_html_template`, `fill_template`) — it no longer has a standalone generation entrypoint.
+
+---
+
+## Automated Lane Rotation
+
+`execution/pipeline_runner.py::run_lane_rotation(count)` is the automated content-generation mode (the manual
+Content Studio / Editorial Lab paths above stay available alongside it, not replaced by it):
+
+```text
+pick `count` lanes, favoring the least-recently-covered (execution.editorial.memory)
+  -> for each lane: lane_discovery.discover_lane_topics(lane_key)
+  -> score the resulting ideas with EditorialScorer, take the top one per lane
+  -> content_asset_service.create_assets_from_idea(idea_id, assets=["blog","pin","newsletter"])
+  -> everything lands in the normal review queues (pending_review / generated)
+```
+
+Run it directly:
+
+```bash
+python -m execution.pipeline_runner --count 6
+```
+
+It's a plain script — schedule it with Windows Task Scheduler (or cron) for unattended, hands-off operation.
+It can also be triggered from the dashboard's Content Studio tab ("Run Lane Rotation" button, backed by
+`POST /api/editorial/rotation/run` + `GET /api/editorial/rotation/status`, same background-thread/poll
+pattern the old Trends scrape button used).
+
+Nothing in this pipeline publishes automatically — content lands as `pending_review`/`generated` rows and is
+reviewed and published manually from Content Studio, exactly like manually-generated content.
+
+---
+
+## Learnings / Updates Log
+
+| Date | Learning |
+|---|---|
+| 2026-08-29 | Retired the Reddit/PubMed trend-scrape pipeline (`reddit_scraper.py`, `medical_articles_scraper.py`, `trend_analyzer.py`, `trend_synthesizer.py`, `trend_topics`/`trendy_topics` tables) and the old broad idea pipeline (`idea_generator.py`, `idea_scorer.py`, `pin_assembler.py`) — both produced content from a title/caption with no real source text behind it, despite claiming otherwise. Replaced by `lane_discovery.py` (research-grounded idea generation) and `pipeline_runner.py::run_lane_rotation` (automated lane rotation), both feeding the same `content_asset_service`/dashboard review flow manual generation already used. |
+| 2026-08-29 | Added a `web_search` collector (Google Programmable Search) so lanes without a fixed official API/page (product_watch, comparison, restaurants_travel, gadgets_tools, apps_digital, organization_life, recipe_experiments, community_questions) can discover new sources live instead of depending entirely on a manually pre-curated priority list. Still gated by the existing source-approval flow. |
+| 2026-08-29 | Blog generation is now research-backed (`execution/research/blog_draft_generator.py`), closing the gap where blog text was written from a title + 160-character Pinterest caption with no source grounding, unlike the newsletter/pinterest paths. |
+| 2026-08-29 | Google was the original choice for the `web_search` collector but turned out to be a dead end: Google's Custom Search JSON API is closed to new customers (Google's own docs: "not available for new customers"), and Google Programmable Search Engine no longer offers whole-web search to newly created engines at all — new engines are capped to a fixed list of domains specified at creation (no more "search the entire web" toggle). Switched to the Brave Web Search API instead, which still does true open web search. Also note: Brave dropped its fully-free, no-card tier in Feb 2026 — it now requires a card on file, ~$5/month credit (~1,000 queries), then billed per query. |

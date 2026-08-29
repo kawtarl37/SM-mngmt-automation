@@ -7,13 +7,14 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from execution.config import TMP_PINS_DIR
-from execution.content.blog_generator import fill_template, generate_blog, get_relevant_product, load_html_template
+from execution.content.blog_generator import fill_template, get_relevant_product, load_html_template
 from execution.content.image_generator import generate_pin_image
 from execution.content.pinterest_publisher import post_pin_to_pinterest
 from execution.content.wordpress_publisher import publish_blog_to_wp, upload_image_to_wp
 from execution.db import get_connection
 from execution.editorial.lane_content_service import create_lane_content
 from execution.models import BlogGenerationResponse, CaptionGenerationResponse
+from execution.research.blog_draft_generator import generate_research_backed_blog
 
 
 DEFAULT_ASSETS = ("pin", "blog", "newsletter")
@@ -269,13 +270,21 @@ def _build_blog_asset(idea: dict, pin: dict, sample: bool, persist: bool) -> dic
     if not persist:
         return {"blog_id": None, "title": idea["title"], "category": "Preview only"}
 
-    blog = generate_blog(int(pin["pin_id"]), forced_title=idea["title"])
+    blog = generate_research_backed_blog(
+        int(pin["pin_id"]),
+        lane=idea.get("content_lane"),
+        angle_type=idea.get("angle_type"),
+        forced_title=idea["title"],
+    )
     if not blog:
         raise RuntimeError("Blog generation returned None.")
     return {
         "blog_id": blog["blog_id"],
         "title": blog["title"],
         "category": blog["category"],
+        "source_notes": blog.get("source_notes", []),
+        "verification_notes": blog.get("verification_notes", []),
+        "status_recommendation": blog.get("status_recommendation", "ready_for_review"),
     }
 
 
@@ -486,6 +495,9 @@ def _sample_blog_content(idea: dict) -> BlogGenerationResponse:
         takeaway_4="Keep the next action clear.",
         takeaway_5="Review before scheduling.",
         category="Gluten-Free Living",
+        source_notes=["Sample mode only. No live sources were fetched."],
+        verification_notes=["Sample mode only."],
+        status_recommendation="ready_for_review",
     )
 
 

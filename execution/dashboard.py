@@ -21,8 +21,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Imports from the execution package
 from execution.config import DB_PATH, TMP_PINS_DIR, SANDBOX_MODE
-from execution.content.publish_scheduler import schedule_approved_pins, run_scheduled_publishes, execute_single_publish
-from execution.content.generate_custom_content import generate_custom
 from execution.content.recipe_generator import generate_recipe
 from execution.content.recipe_wp_publisher import build_wprm_import_payload, publish_recipe_to_wp, upload_recipe_image_to_wp
 from execution.content.pinterest_publisher import post_pin_to_pinterest
@@ -178,116 +176,6 @@ def _get_recipe_row(recipe_id: int) -> dict | None:
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
-
-# ──────────────────────────────────────────────
-# API: Pins
-# ──────────────────────────────────────────────
-
-@app.route('/api/pins', methods=['GET'])
-def get_pending_pins():
-    from execution.editorial.schema import ensure_editorial_schema
-    ensure_editorial_schema()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    # Left join to accommodate custom pins where idea_id = 0
-    cursor.execute("""
-        SELECT p.pin_id, p.title, p.description, p.image_path, p.status, p.seo_keywords,
-               c.content_type, c.content_lane, c.angle_type, c.freshness_hook, c.source_hint
-        FROM generated_pins p
-        LEFT JOIN content_ideas c ON p.idea_id = c.idea_id
-        WHERE p.status = 'pending'
-    """)
-    pins = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return jsonify(pins)
-
-@app.route('/api/pins/<int:pin_id>/approve', methods=['POST'])
-def approve_pin(pin_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE generated_pins SET status = 'approved' WHERE pin_id = ?", (pin_id,))
-    conn.commit()
-    conn.close()
-
-    # Auto-schedule the pin for publishing
-    try:
-        schedule_approved_pins()
-    except Exception as e:
-        return jsonify({"success": True, "warning": f"Pin approved but scheduling failed: {e}"}), 200
-
-    return jsonify({"success": True, "message": "Pin approved and added to publish queue."})
-
-@app.route('/api/pins/<int:pin_id>/reject', methods=['POST'])
-def reject_pin(pin_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    data = request.get_json() or {}
-    reason = data.get("reason", "")
-    cursor.execute(
-        "UPDATE generated_pins SET status = 'rejected', rejection_reason = ? WHERE pin_id = ?",
-        (reason, pin_id)
-    )
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True})
-
-# ──────────────────────────────────────────────
-# API: Publish Schedule Queue
-# ──────────────────────────────────────────────
-
-@app.route('/api/schedule', methods=['GET'])
-def get_schedule():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT s.schedule_id, s.pin_id, s.scheduled_time, s.status,
-               s.error_message, s.completed_at,
-               p.title as pin_title,
-               b.wp_url
-        FROM publish_schedule s
-        JOIN generated_pins p ON s.pin_id = p.pin_id
-        LEFT JOIN blogs b ON s.blog_id = b.blog_id
-        ORDER BY s.scheduled_time ASC
-        LIMIT 30
-    """)
-    schedule = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return jsonify(schedule)
-
-@app.route('/api/publish/run', methods=['POST'])
-def run_publish():
-    """Manually trigger the scheduled publishes check."""
-    try:
-        run_scheduled_publishes()
-        return jsonify({"success": True, "message": "Publish runner executed successfully."})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-@app.route('/api/publish/now/<int:pin_id>', methods=['POST'])
-def publish_now(pin_id):
-    """Publish a pin immediately, out of schedule."""
-    try:
-        success = execute_single_publish(pin_id)
-        if success:
-            return jsonify({"success": True, "message": "Pin published immediately."})
-        else:
-            return jsonify({"success": False, "error": "Internal publishing error."}), 500
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-@app.route('/api/generate_custom', methods=['POST'])
-def generate_custom_api():
-    """Generate on-demand custom content."""
-    data = request.get_json() or {}
-    topic_type = data.get("topic_type", "Educational")
-    try:
-        result = generate_custom(topic_type)
-        if result:
-            return jsonify({"success": True, "pin": result})
-        return jsonify({"success": False, "error": "Failed to generate (returned None)."}), 500
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
 
 # ──────────────────────────────────────────────
 # API: Recipe Generation (Async)
@@ -687,237 +575,6 @@ def oauth_status():
     return jsonify({"done": False})
 
 
-# ──────────────────────────────────────────────
-# API: Trend Analysis & Blog Gen
-# ──────────────────────────────────────────────
-
-_TRENDS_SCRAPE_STATUS = {"status": "idle", "error": None}
-_TRENDS_LOCK = threading.Lock()
-
-def _run_trends_scrape_task():
-    global _TRENDS_SCRAPE_STATUS
-    try:
-        from execution.scrapers.reddit_scraper import run_scraper as run_reddit
-        run_reddit()
-        
-        from execution.scrapers.medical_articles_scraper import run_scraper as run_pubmed
-        run_pubmed()
-        
-        from execution.intelligence.trend_analyzer import rank_trends
-        rank_trends()
-        
-        from execution.intelligence.trend_synthesizer import synthesize_trends
-        synthesize_trends()
-        
-        with _TRENDS_LOCK:
-            _TRENDS_SCRAPE_STATUS = {"status": "done", "error": None}
-    except Exception as e:
-        import logging
-        logging.getLogger("dashboard").error(f"Background trends scrape failed: {e}", exc_info=True)
-        with _TRENDS_LOCK:
-            _TRENDS_SCRAPE_STATUS = {"status": "error", "error": str(e)}
-
-@app.route('/api/trends', methods=['GET'])
-def get_trends():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM trendy_topics ORDER BY relevance_score DESC, created_at DESC")
-    trends = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return jsonify(trends)
-
-@app.route('/api/trends/scrape', methods=['POST'])
-def api_trends_scrape():
-    global _TRENDS_SCRAPE_STATUS
-    with _TRENDS_LOCK:
-        if _TRENDS_SCRAPE_STATUS["status"] == "running":
-            return jsonify({"status": "running", "message": "Scrape already in progress."})
-        _TRENDS_SCRAPE_STATUS = {"status": "running", "error": None}
-    t = threading.Thread(target=_run_trends_scrape_task, daemon=True)
-    t.start()
-    return jsonify({"status": "started"})
-
-@app.route('/api/trends/scrape/status', methods=['GET'])
-def api_trends_scrape_status():
-    with _TRENDS_LOCK:
-        return jsonify(_TRENDS_SCRAPE_STATUS)
-
-@app.route('/api/trends/<int:topic_id>/approve', methods=['POST'])
-def api_trend_approve(topic_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE trendy_topics SET status='approved' WHERE topic_id=?", (topic_id,))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True})
-
-@app.route('/api/trends/<int:topic_id>/reject', methods=['POST'])
-def api_trend_reject(topic_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE trendy_topics SET status='rejected' WHERE topic_id=?", (topic_id,))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True})
-
-@app.route('/api/trends/<int:topic_id>/suggest_title', methods=['POST'])
-def api_trend_suggest_title(topic_id):
-    """Suggest and apply one alternate title for a trendy topic."""
-    from execution.config import PROMPTS_DIR
-    from execution.models import BlogTitleSuggestionResponse
-    from execution.utils.llm_client import LLMClient
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM trendy_topics WHERE topic_id=?", (topic_id,))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        return jsonify({"success": False, "error": "Topic not found"}), 404
-    topic = dict(row)
-    conn.close()
-
-    try:
-        system_prompt = (PROMPTS_DIR / "brand_system_prompt.txt").read_text(encoding="utf-8")
-        user_prompt = f"""
-Suggest ONE alternate blog title for this approved Easy Gluten Free trend.
-
-Current title: {topic['title']}
-Details: {topic['details']}
-Source: {topic['source']}
-
-Rules:
-- Return one title only in the structured schema.
-- Keep it factual and aligned with the topic details.
-- Keep it SEO-friendly and natural for gluten-free readers.
-- Do not use generic phrases like "ultimate guide" or "game changer".
-- Do not use emojis.
-"""
-        response: BlogTitleSuggestionResponse = LLMClient().generate_structured(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            response_format=BlogTitleSuggestionResponse,
-            task_name="trend_title_suggestion",
-        )
-        new_title = response.title.strip()
-        if not new_title:
-            return jsonify({"success": False, "error": "Title suggestion was empty."}), 500
-    except Exception as e:
-        return jsonify({"success": False, "error": f"Failed to suggest title: {e}"}), 500
-
-    conn = get_db_connection()
-    conn.execute("UPDATE trendy_topics SET title=? WHERE topic_id=?", (new_title, topic_id))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True, "title": new_title})
-
-@app.route('/api/trends/<int:topic_id>/generate_blog', methods=['POST'])
-def api_trend_generate_blog(topic_id):
-    import datetime
-    from execution.config import PROMPTS_DIR
-    from execution.utils.llm_client import LLMClient
-    from execution.content.image_generator import generate_pin_image
-    from execution.content.blog_generator import generate_blog
-    
-    # 1. Fetch topic
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM trendy_topics WHERE topic_id=?", (topic_id,))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        return jsonify({"success": False, "error": "Topic not found"}), 404
-    topic = dict(row)
-    conn.close()
-
-    # 2. Call LLM for caption
-    client = LLMClient()
-    system_prompt = (PROMPTS_DIR / "brand_system_prompt.txt").read_text(encoding="utf-8")
-    user_prompt = f"""
-Create a new Pinterest pin idea and caption for this trendy topic:
-Title: {topic['title']}
-Details: {topic['details']}
-Source: {topic['source']}
-Editorial lane: {topic.get('content_lane') or 'unspecified'}
-Angle type: {topic.get('angle_type') or 'unspecified'}
-Freshness hook: {topic.get('freshness_hook') or 'Make the topic feel current and useful.'}
-
-Provide:
-1. A catchy, Pinterest-optimized Pin Title (incorporating GF keywords, max 70 chars).
-2. A descriptive Pin Caption / Description (max 160 chars, in Claire's voice, witty and relatable).
-3. A list of 3-5 relevant hashtags.
-4. An alt text description for the image.
-
-Output should match the CaptionGenerationResponse schema.
-"""
-    try:
-        from execution.models import CaptionGenerationResponse
-        caption_resp: CaptionGenerationResponse = client.generate_structured(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            response_format=CaptionGenerationResponse,
-            task_name="custom_caption"
-        )
-    except Exception as e:
-        return jsonify({"success": False, "error": f"Failed to generate caption: {e}"}), 500
-
-    # 3. Insert Pin as approved
-    try:
-        from execution.database import get_db, GeneratedPin
-        db_generator = get_db()
-        db = next(db_generator)
-        new_pin = GeneratedPin(
-            idea_id=0,
-            title=topic["title"],
-            description=caption_resp.pin_description,
-            seo_keywords=", ".join(caption_resp.hashtags),
-            status="approved",
-            batch_date=datetime.date.today(),
-            created_at=datetime.datetime.utcnow()
-        )
-        db.add(new_pin)
-        db.commit()
-        db.refresh(new_pin)
-        pin_id = new_pin.pin_id
-        next(db_generator, None)
-    except Exception as e:
-        return jsonify({"success": False, "error": f"Failed to save pin: {e}"}), 500
-
-    # 4. Generate Pin image
-    try:
-        subtitle = "Tips & Tricks" if "Reddit" in topic['source'] else "Know Your Ingredients"
-        image_path = generate_pin_image(topic["title"], pin_id, subtitle=subtitle)
-        if image_path:
-            conn = get_db_connection()
-            conn.execute("UPDATE generated_pins SET image_path=? WHERE pin_id=?", (image_path, pin_id))
-            conn.commit()
-            conn.close()
-    except Exception:
-        pass
-
-    # 5. Generate Blog
-    try:
-        blog_data = generate_blog(pin_id, forced_title=topic["title"])
-        if not blog_data:
-            return jsonify({"success": False, "error": "Blog generation failed."}), 500
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-    # 6. Schedule approved pin
-    try:
-        schedule_approved_pins()
-    except Exception as e:
-        return jsonify({"success": True, "warning": f"Blog generated but scheduling failed: {e}", "pin_id": pin_id}), 200
-
-    # 7. Update trend status
-    conn = get_db_connection()
-    conn.execute("UPDATE trendy_topics SET status='generated' WHERE topic_id=?", (topic_id,))
-    conn.commit()
-    conn.close()
-
-    return jsonify({"success": True, "pin_id": pin_id, "blog_title": blog_data["title"]})
-
-
 @app.route('/api/config')
 def api_config():
     """Return runtime configuration flags to the frontend."""
@@ -926,6 +583,55 @@ def api_config():
         "sandbox_mode": _SM,
         "api_base": "https://api-sandbox.pinterest.com/v5" if _SM else "https://api.pinterest.com/v5",
     })
+
+
+# ──────────────────────────────────────────────
+# API: Automated Lane Rotation
+# ──────────────────────────────────────────────
+
+_ROTATION_STATUS = {"status": "idle", "error": None, "result": None, "progress": None}
+_ROTATION_LOCK = threading.Lock()
+
+
+def _run_lane_rotation_task(count: int):
+    global _ROTATION_STATUS
+    try:
+        from execution.pipeline_runner import run_lane_rotation
+
+        with _ROTATION_LOCK:
+            _ROTATION_STATUS["progress"] = f"covering {count} lane(s)"
+        result = run_lane_rotation(count=count)
+        with _ROTATION_LOCK:
+            _ROTATION_STATUS = {"status": "done", "error": None, "result": result, "progress": None}
+    except Exception as e:
+        import logging
+        logging.getLogger("dashboard").error(f"Background lane rotation failed: {e}", exc_info=True)
+        with _ROTATION_LOCK:
+            _ROTATION_STATUS = {"status": "error", "error": str(e), "result": None, "progress": None}
+
+
+@app.route('/api/editorial/rotation/run', methods=['POST'])
+def api_rotation_run():
+    """Kick off automated lane-rotation content generation in the background."""
+    global _ROTATION_STATUS
+    from execution.config import LANE_ROTATION_COUNT
+
+    data = request.get_json() or {}
+    count = int(data.get("count") or LANE_ROTATION_COUNT)
+
+    with _ROTATION_LOCK:
+        if _ROTATION_STATUS["status"] == "running":
+            return jsonify({"status": "running", "message": "Lane rotation already in progress."})
+        _ROTATION_STATUS = {"status": "running", "error": None, "result": None, "progress": None}
+    t = threading.Thread(target=_run_lane_rotation_task, args=(count,), daemon=True)
+    t.start()
+    return jsonify({"status": "started"})
+
+
+@app.route('/api/editorial/rotation/status', methods=['GET'])
+def api_rotation_status():
+    with _ROTATION_LOCK:
+        return jsonify(_ROTATION_STATUS)
 
 
 @app.route('/api/editorial/lanes', methods=['GET'])
@@ -1243,10 +949,8 @@ def api_amazon_product_match():
 
 @app.route('/api/blog-preview/generate', methods=['POST'])
 def api_blog_preview_generate():
-    from execution.config import PROMPTS_DIR
     from execution.content.blog_generator import fill_template, get_relevant_product, load_html_template
-    from execution.models import BlogGenerationResponse
-    from execution.utils.llm_client import LLMClient
+    from execution.research.blog_draft_generator import generate_blog_content
 
     data = request.get_json() or {}
     lane = data.get("lane") or "product_watch"
@@ -1254,41 +958,34 @@ def api_blog_preview_generate():
     topic_title = (data.get("topic_title") or defaults["title"]).strip()
     topic_description = (data.get("description") or defaults["description"]).strip()
 
-    product = get_relevant_product(
-        topic_title=topic_title,
-        topic_description=topic_description,
-        content_lane=lane,
-    )
-    if not product:
-        return jsonify({"success": False, "error": "No Amazon products are available"}), 404
-
     try:
         if data.get("sample"):
+            product = get_relevant_product(
+                topic_title=topic_title,
+                topic_description=topic_description,
+                content_lane=lane,
+            )
+            if not product:
+                return jsonify({"success": False, "error": "No Amazon products are available"}), 404
             content = _sample_blog_preview_content(topic_title, lane)
             generation_mode = "sample"
+            final_html = fill_template(load_html_template(), content, product)
         else:
-            system_prompt = (PROMPTS_DIR / "brand_system_prompt.txt").read_text(encoding="utf-8")
-            user_prompt_template = (PROMPTS_DIR / "blog_generation.txt").read_text(encoding="utf-8")
-            user_prompt = user_prompt_template.format(
-                pin_topic=topic_title,
-                pin_description=topic_description,
-                product_title=product["title"],
-                product_description=product["description"],
+            # Preview mode is still research-backed (same generator as real
+            # blog generation) but never persists to the `blogs` table.
+            generated = generate_blog_content(
+                topic_title=topic_title,
+                topic_description=topic_description,
+                lane=lane,
+                limit_per_task=3,
+                persist_research=False,
             )
-            user_prompt += (
-                "\n\nPREVIEW MODE:\n"
-                "Generate a complete blog draft for visual review only. "
-                "Do not mention that this is a preview. Keep the structure complete."
-            )
-
-            content = LLMClient().generate_structured(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                response_format=BlogGenerationResponse,
-                task_name="blog_preview_generation",
-            )
+            if not generated:
+                return jsonify({"success": False, "error": "No Amazon products are available, or research/LLM generation failed. Check server logs."}), 500
+            content = generated["content"]
+            product = generated["product"]
+            final_html = generated["html"]
             generation_mode = "llm"
-        final_html = fill_template(load_html_template(), content, product)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -1604,17 +1301,13 @@ def index():
                     <button class="btn-hdr btn-hdr-recipe" id="btn-gen-recipe" onclick="startRecipeGeneration()">
                         <span class="spinner"></span>🍽️ Generate Recipe
                     </button>
-                    <button class="btn-hdr btn-hdr-primary" onclick="openGenModal()">+ Generate Content</button>
                     <button class="btn-hdr btn-hdr-ghost" onclick="reauthorizePinterest()" title="Re-run Pinterest OAuth">🔑 Re-auth</button>
                 </div>
             </div>
             <nav class="tab-nav">
-                <button class="tab-btn active" id="tabnav-pending" onclick="showTab('tab-pending',this)">Pending Review</button>
-                <button class="tab-btn" id="tabnav-queue" onclick="showTab('tab-queue',this)">Publish Queue</button>
-                <button class="tab-btn" id="tabnav-recipes" onclick="showTab('tab-recipes',this)">🍽️ Recipes</button>
-                <button class="tab-btn" id="tabnav-trends" onclick="showTab('tab-trends',this)">🔥 Trends &amp; Blog Gen</button>
-                <button class="tab-btn" id="tabnav-studio" onclick="showTab('tab-studio',this)">Content Studio</button>
+                <button class="tab-btn active" id="tabnav-studio" onclick="showTab('tab-studio',this)">Content Studio</button>
                 <button class="tab-btn" id="tabnav-editorial" onclick="showTab('tab-editorial',this)">Editorial Lab</button>
+                <button class="tab-btn" id="tabnav-recipes" onclick="showTab('tab-recipes',this)">🍽️ Recipes</button>
             </nav>
         </header>
 
@@ -1630,28 +1323,6 @@ def index():
         </div>
 
         <main>
-            <!-- PENDING PINS -->
-            <div id="tab-pending" class="tab-content active">
-                <div class="section-header">
-                    <p class="section-title">Pins Awaiting Approval</p>
-                </div>
-                <div id="pins-container" class="pins-grid"><div class="empty">Loading pins…</div></div>
-            </div>
-
-            <!-- PUBLISH QUEUE -->
-            <div id="tab-queue" class="tab-content">
-                <div class="section-header">
-                    <p class="section-title">Upcoming Publish Schedule (US Eastern)</p>
-                    <button id="btn-run-publish" class="btn btn-trigger" onclick="triggerPublishRunner()">
-                        <span class="spinner"></span>Trigger Publish Now
-                    </button>
-                </div>
-                <table class="schedule-table">
-                    <thead><tr><th>#</th><th>Pin Title</th><th>Scheduled (EST)</th><th>Status</th><th>Blog Link</th><th>Actions</th></tr></thead>
-                    <tbody id="schedule-body"><tr><td colspan="6" style="text-align:center;padding:28px;color:#aaa">Loading…</td></tr></tbody>
-                </table>
-            </div>
-
             <!-- RECIPES TAB -->
             <div id="tab-recipes" class="tab-content">
                 <div class="section-header">
@@ -1668,59 +1339,32 @@ def index():
                 <div id="recipes-approved-container" class="recipes-grid"><div class="empty">No approved recipes yet.</div></div>
             </div>
 
-            <!-- TRENDS TAB -->
-            <div id="tab-trends" class="tab-content">
-                <div class="section-header">
-                    <p class="section-title">Trendy Topics Discovered (AI &amp; PubMed)</p>
-                    <button class="btn btn-trigger" id="btn-scrape-trends" onclick="scrapeAndSynthesizeTrends()">
-                        <span class="spinner"></span>↻ Scrape &amp; Synthesize Trends
-                    </button>
-                </div>
-                
-                <!-- Pending Trends Section -->
-                <div style="margin-bottom: 24px;">
-                    <h3 style="font-size: 1.1rem; color: #1a1a2e; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-                        🔥 Discovered Trends (Pending Review)
-                    </h3>
-                    <div id="trends-pending-container" class="pins-grid">
-                        <div class="empty">Click "Scrape &amp; Synthesize Trends" to fetch and learn the latest trends.</div>
-                    </div>
-                </div>
-
-                <!-- Approved Trends Section -->
-                <div class="section-divider" style="margin-top: 36px;">
-                    <h3>✅ Approved Topics &amp; Blog Queue</h3>
-                    <p>Generate a complete WordPress blog + Pinterest Pin package directly from these topics.</p>
-                </div>
-                
-                <table class="schedule-table" style="margin-top: 14px;">
-                    <thead>
-                        <tr>
-                            <th style="width: 250px;">Topic Title</th>
-                            <th style="width: 150px;">Source</th>
-                            <th>Details &amp; AI Learnings</th>
-                            <th style="width: 180px;">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="trends-approved-body">
-                        <tr>
-                            <td colspan="4" style="text-align:center;padding:28px;color:#aaa">No approved topics yet. Approve a discovered trend above.</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-
             <!-- CONTENT STUDIO TAB -->
-            <div id="tab-studio" class="tab-content">
+            <div id="tab-studio" class="tab-content active">
                 <div class="section-header">
                     <p class="section-title">Content Studio: Lane Ideas to Publishable Assets</p>
                     <button class="btn btn-trigger" onclick="fetchContentStudio()">Refresh</button>
                 </div>
+                <div class="studio-panel" style="margin-bottom:20px;">
+                    <h3>Automated Lane Rotation</h3>
+                    <p>Covers the least-recently-touched lanes automatically: runs live research, generates grounded ideas, and produces a full blog + pin + newsletter bundle per lane. Everything lands below for review — nothing publishes on its own.</p>
+                    <div class="lab-row">
+                        <select id="rotation-count">
+                            <option value="3">3 lanes</option>
+                            <option value="6" selected>6 lanes</option>
+                            <option value="10">10 lanes (all)</option>
+                        </select>
+                        <button class="btn btn-approve" id="btn-run-rotation" onclick="runLaneRotation()">
+                            <span class="spinner"></span>Run Lane Rotation
+                        </button>
+                    </div>
+                    <div id="rotation-status" class="empty" style="margin-top:8px;"></div>
+                </div>
                 <div class="studio-grid">
                     <div class="studio-stack">
                         <div class="studio-panel">
-                            <h3>Generate Ideas by Topic Lane</h3>
-                            <p>Pick a lane, generate fresh ideas, then turn any idea into a blog, Pinterest pin, and newsletter copy.</p>
+                            <h3>Generate Ideas by Topic Lane (Manual)</h3>
+                            <p>Pick one lane on demand — runs the same live discovery as the rotation, scoped to a single lane, then turn any idea into a blog, Pinterest pin, and newsletter copy.</p>
                             <div class="lab-form">
                                 <div class="lab-row">
                                     <select id="studio-lane" onchange="fetchStudioIdeas()">
@@ -1931,26 +1575,6 @@ def index():
             </div>
         </main>
 
-        <!-- Generate Content Modal -->
-        <div class="modal-overlay" id="gen-modal">
-            <div class="modal">
-                <h2>Generate Custom Content</h2>
-                <p style="font-size:.87rem;color:#666;margin-bottom:14px">Generate a blog + pin package for a topic. Added silently to Pending Review.</p>
-                <select id="gen-topic">
-                    <option value="Educational">Educational (Know Your Ingredients)</option>
-                    <option value="Practical Guide">Practical Guide (Tips &amp; Tricks)</option>
-                    <option value="Lifestyle">Lifestyle (Living Gluten-Free)</option>
-                    <option value="Health &amp; Wellness">Health &amp; Wellness (Healthy Living)</option>
-                </select>
-                <div class="actions">
-                    <button class="btn-close" onclick="closeGenModal()">Cancel</button>
-                    <button class="btn btn-approve" id="btn-gen-submit" onclick="submitGenerate()">
-                        <span class="spinner"></span> Generate
-                    </button>
-                </div>
-            </div>
-        </div>
-
         <script>
         // ── Sandbox mode: fetch config and show banner ──
         let _sandboxMode = false;
@@ -1971,120 +1595,9 @@ def index():
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             document.getElementById(id).classList.add('active');
             el.classList.add('active');
-            if (id === 'tab-queue') fetchSchedule();
-            else if (id === 'tab-recipes') fetchRecipes();
-            else if (id === 'tab-trends') fetchTrends();
+            if (id === 'tab-recipes') fetchRecipes();
             else if (id === 'tab-studio') fetchContentStudio();
             else if (id === 'tab-editorial') fetchEditorialLab();
-            else fetchPins();
-        }
-
-        // ── Generate Content Modal ──
-        function openGenModal() { document.getElementById('gen-modal').style.display = 'flex'; }
-        function closeGenModal() { document.getElementById('gen-modal').style.display = 'none'; }
-        async function submitGenerate() {
-            const topic = document.getElementById('gen-topic').value;
-            const btn = document.getElementById('btn-gen-submit');
-            btn.classList.add('loading'); btn.disabled = true;
-            try {
-                const res = await fetch('/api/generate_custom', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic_type:topic})});
-                const data = await res.json();
-                if (data.success) { alert('Done! Check Pending Review.'); closeGenModal(); fetchPins(); }
-                else alert('Failed: ' + data.error);
-            } catch(e) { alert('Error: ' + e); }
-            btn.classList.remove('loading'); btn.disabled = false;
-        }
-
-        // ── Pins ──
-        async function fetchPins() {
-            const res = await fetch('/api/pins');
-            const pins = await res.json();
-            const container = document.getElementById('pins-container');
-            if (!pins.length) { container.innerHTML = '<div class="empty">🎉 All caught up! No pending pins.</div>'; return; }
-            container.innerHTML = pins.map(pin => {
-                const filename = pin.image_path ? pin.image_path.split(/[\\\\/]/).pop() : '';
-                const cType = pin.content_type || 'Custom Gen';
-                return `<div class="pin-card" id="pin-${pin.pin_id}">
-                    <img src="/images/${filename}" class="pin-image" alt="" onerror="this.style.display='none'">
-                    <div class="pin-content">
-                        <span class="pin-badge">${cType}</span>
-                        <div class="pin-title">${pin.title}</div>
-                        <div class="pin-desc">${pin.description}</div>
-                        <div class="pin-keywords"><strong>Keywords:</strong> ${pin.seo_keywords||'N/A'}</div>
-                    </div>
-                    <div class="pin-actions">
-                        <button class="btn btn-approve" onclick="approvePin(${pin.pin_id})">✓ Approve</button>
-                        <button class="btn btn-reject"  onclick="rejectPin(${pin.pin_id})">✗ Reject</button>
-                    </div>
-                </div>`;
-            }).join('');
-        }
-        async function approvePin(id) {
-            if (!confirm('Approve this pin?')) return;
-            const data = await (await fetch(`/api/pins/${id}/approve`,{method:'POST'})).json();
-            if (data.success) { document.getElementById(`pin-${id}`).remove(); checkEmpty('pins-container','<div class="empty">🎉 No pending pins.</div>'); alert(data.message||'Approved!'); }
-        }
-        async function rejectPin(id) {
-            const reason = prompt('Rejection reason (optional):') || '';
-            const data = await (await fetch(`/api/pins/${id}/reject`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason})})).json();
-            if (data.success) { document.getElementById(`pin-${id}`).remove(); checkEmpty('pins-container','<div class="empty">🎉 No pending pins.</div>'); }
-        }
-        function checkEmpty(cid, html) { const c=document.getElementById(cid); if(c&&!c.querySelector('.pin-card,.recipe-card')) c.innerHTML=html; }
-
-        // ── Schedule ──
-        async function fetchSchedule() {
-            const rows = await (await fetch('/api/schedule')).json();
-            const tbody = document.getElementById('schedule-body');
-            if (!rows.length) { tbody.innerHTML='<tr><td colspan="6" style="text-align:center;padding:28px;color:#aaa">No scheduled publishes yet.</td></tr>'; return; }
-            tbody.innerHTML = rows.map((r,i) => {
-                const estTime = new Date(r.scheduled_time).toLocaleString('en-US',{timeZone:'America/New_York',dateStyle:'medium',timeStyle:'short'});
-                const statusCls = `status-${r.status}`;
-                let link = r.wp_url ? `<a href="${r.wp_url}" target="_blank" style="color:#27ae60;font-weight:600">View Post ↗</a>` : '—';
-                const err = r.error_message ? `<span class="error-text" title="${r.error_message}">${r.error_message}</span>` : '';
-                const actions = (r.status==='pending'||r.status==='failed') ? `<button class="btn btn-publish" onclick="initiatePostNow(${r.pin_id},this)"><span class="spinner"></span>Post Now</button>` : '';
-                return `<tr><td>${i+1}</td><td>${r.pin_title}</td><td>${estTime}</td>
-                    <td><span class="status-badge ${statusCls}">${r.status}</span>${err}</td>
-                    <td>${link}</td><td class="action-col">${actions}</td></tr>`;
-            }).join('');
-        }
-        async function triggerPublishRunner() {
-            const btn = document.getElementById('btn-run-publish');
-            if (!confirm('Run the publish runner now?')) return;
-            btn.classList.add('loading'); btn.disabled=true;
-            try {
-                const data = await (await fetch('/api/publish/run',{method:'POST'})).json();
-                if (data.success) { alert(data.message); fetchSchedule(); }
-                else alert('Error: '+(data.error||'Unknown'));
-            } catch(e) { alert('Failed: '+e); }
-            btn.classList.remove('loading'); btn.disabled=false;
-        }
-        async function initiatePostNow(pin_id, btnEl) {
-            if (!confirm('Publish this pin immediately? Pinterest authorization will open.')) return;
-            btnEl.classList.add('loading'); btnEl.disabled=true;
-            try {
-                const res = await fetch('/api/oauth/start');
-                const data = await res.json();
-                if (!data.auth_url) throw new Error(data.error||'No auth URL');
-                const popup = window.open(data.auth_url,'pinterest_oauth','width=620,height=720,left=200,top=100');
-                if (!popup) { alert('Popup blocked. Allow popups and retry.'); btnEl.classList.remove('loading'); btnEl.disabled=false; return; }
-                const poll = setInterval(async () => {
-                    try {
-                        const s = await (await fetch('/api/oauth/status')).json();
-                        if (!s.done) return;
-                        clearInterval(poll);
-                        if (popup && !popup.closed) popup.close();
-                        if (!s.success) { alert('Pinterest auth failed: '+(s.error||'Unknown')); btnEl.classList.remove('loading'); btnEl.disabled=false; return; }
-                        await postNow(pin_id, btnEl);
-                    } catch(_) {}
-                }, 800);
-            } catch(e) { alert('OAuth start failed: '+e); btnEl.classList.remove('loading'); btnEl.disabled=false; }
-        }
-        async function postNow(pin_id, btnEl) {
-            try {
-                const data = await (await fetch(`/api/publish/now/${pin_id}`,{method:'POST'})).json();
-                if (data.success) { alert(data.message); fetchSchedule(); }
-                else { alert('Error: '+data.error); btnEl.classList.remove('loading'); btnEl.disabled=false; }
-            } catch(e) { alert('Request failed: '+e); btnEl.classList.remove('loading'); btnEl.disabled=false; }
         }
 
         // ─────────────────────────────────────────────────────
@@ -2362,178 +1875,6 @@ def index():
             } catch(e) { alert('Error: '+e); }
         }
 
-        // ── Trends & Insights ──
-        async function fetchTrends() {
-            try {
-                const res = await fetch('/api/trends');
-                const trends = await res.json();
-                
-                const pending = trends.filter(t => t.status === 'pending');
-                const approved = trends.filter(t => t.status === 'approved');
-                
-                renderPendingTrends(pending);
-                renderApprovedTrends(approved);
-            } catch(e) {
-                console.error("Error fetching trends:", e);
-            }
-        }
-        
-        function renderPendingTrends(trends) {
-            const container = document.getElementById('trends-pending-container');
-            if (!trends.length) {
-                container.innerHTML = '<div class="empty">🎉 All caught up! No pending trends. Click "Scrape & Synthesize Trends" above to discover new ones.</div>';
-                return;
-            }
-            container.innerHTML = trends.map(t => {
-                const isPubMed = t.source.toLowerCase().includes('pubmed');
-                const badgeColor = isPubMed ? 'background:#e8f4fd;color:#1565c0;border:1px solid #bbdefb;' : 'background:#fde8e8;color:#c0392b;border:1px solid #ffcdd2;';
-                const scoreColor = t.relevance_score >= 0.8 ? 'color:#27ae60' : t.relevance_score >= 0.5 ? 'color:#e67e22' : 'color:#555';
-                
-                return `<div class="pin-card" id="trend-card-${t.topic_id}" style="padding:18px;min-height:220px;display:flex;flex-direction:column;justify-content:space-between;">
-                    <div style="flex-grow:1;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                            <span class="pin-badge" style="${badgeColor}">${t.source}</span>
-                            <span style="font-size:0.75rem;font-weight:700;${scoreColor}">★ ${t.relevance_score.toFixed(2)} Relevance</span>
-                        </div>
-                        <h4 style="font-size:0.95rem;font-weight:700;margin-bottom:8px;color:#1a1a2e;">${t.title}</h4>
-                        <p style="font-size:0.8rem;color:#555;line-height:1.55;margin-bottom:12px;">${t.details}</p>
-                    </div>
-                    <div class="pin-actions" style="border-top:1px solid #f0f0f0;padding-top:10px;margin-top:10px;display:flex;gap:8px;">
-                        <button class="btn btn-approve" onclick="approveTrend(${t.topic_id})">✓ Approve</button>
-                        <button class="btn btn-reject" onclick="rejectTrend(${t.topic_id})">✗ Reject</button>
-                    </div>
-                </div>`;
-            }).join('');
-        }
-        
-        function renderApprovedTrends(trends) {
-            const tbody = document.getElementById('trends-approved-body');
-            if (!trends.length) {
-                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:28px;color:#aaa">No approved topics yet. Approve a discovered trend above.</td></tr>';
-                return;
-            }
-            tbody.innerHTML = trends.map(t => {
-                const isPubMed = t.source.toLowerCase().includes('pubmed');
-                const badgeColor = isPubMed ? 'background:#e8f4fd;color:#1565c0;border:1px solid #bbdefb;' : 'background:#fde8e8;color:#c0392b;border:1px solid #ffcdd2;';
-                
-                return `<tr id="trend-row-${t.topic_id}">
-                    <td style="font-weight:700;color:#1a1a2e;vertical-align:top;padding-top:14px;">${t.title}</td>
-                    <td style="vertical-align:top;padding-top:14px;"><span class="pin-badge" style="${badgeColor}">${t.source}</span></td>
-                    <td style="color:#555;line-height:1.5;font-size:0.8rem;vertical-align:top;padding-top:14px;">${t.details}</td>
-                    <td style="vertical-align:top;padding-top:10px;">
-                        <button class="btn btn-trigger" onclick="suggestTrendTitle(${t.topic_id}, this)" style="padding:6px 12px;font-size:0.78rem;margin-bottom:6px;width:100%;">
-                            Suggest Another Title
-                        </button>
-                        <button class="btn btn-approve" onclick="generateBlogFromTrend(${t.topic_id}, this)" style="padding:6px 12px;font-size:0.78rem;background:linear-gradient(135deg,#e94560,#c73652);display:flex;align-items:center;justify-content:center;gap:4px;width:100%;">
-                            <span class="spinner"></span>✍️ Generate Blog &amp; Pin
-                        </button>
-                    </td>
-                </tr>`;
-            }).join('');
-        }
-
-        async function approveTrend(id) {
-            try {
-                const res = await fetch(`/api/trends/${id}/approve`, {method:'POST'});
-                const data = await res.json();
-                if (data.success) {
-                    fetchTrends();
-                }
-            } catch(e) { alert("Error approving trend: " + e); }
-        }
-
-        async function rejectTrend(id) {
-            if (!confirm('Reject and dismiss this trendy topic?')) return;
-            try {
-                const res = await fetch(`/api/trends/${id}/reject`, {method:'POST'});
-                const data = await res.json();
-                if (data.success) {
-                    fetchTrends();
-                }
-            } catch(e) { alert("Error rejecting trend: " + e); }
-        }
-
-        async function suggestTrendTitle(id, btn) {
-            if (!confirm('Suggest and replace this approved topic title?')) return;
-            const original = btn.textContent;
-            btn.disabled = true;
-            btn.textContent = 'Suggesting...';
-            try {
-                const res = await fetch(`/api/trends/${id}/suggest_title`, {method:'POST'});
-                const data = await res.json();
-                if (data.success) {
-                    fetchTrends();
-                } else {
-                    alert("Failed: " + data.error);
-                    btn.disabled = false;
-                    btn.textContent = original;
-                }
-            } catch(e) {
-                alert("Error suggesting title: " + e);
-                btn.disabled = false;
-                btn.textContent = original;
-            }
-        }
-
-        async function generateBlogFromTrend(id, btn) {
-            if (!confirm('Generate a complete Blog Post and Pinterest Pin for this topic? It will be automatically scheduled in the publish queue.')) return;
-            btn.classList.add('loading'); btn.disabled = true;
-            try {
-                const res = await fetch(`/api/trends/${id}/generate_blog`, {method:'POST'});
-                const data = await res.json();
-                if (data.success) {
-                    alert(`Success! Blog generated: "${data.blog_title}".\nIt has been added to the Publish Queue.`);
-                    fetchTrends();
-                } else {
-                    alert("Failed: " + data.error);
-                    btn.classList.remove('loading'); btn.disabled = false;
-                }
-            } catch(e) { 
-                alert("Error generating blog: " + e); 
-                btn.classList.remove('loading'); btn.disabled = false;
-            }
-        }
-
-        let _trendsScrapePollInterval = null;
-        async function scrapeAndSynthesizeTrends() {
-            const btn = document.getElementById('btn-scrape-trends');
-            btn.classList.add('loading'); btn.disabled = true;
-            try {
-                const res = await fetch('/api/trends/scrape', {method:'POST'});
-                const data = await res.json();
-                if (data.status === 'started' || data.status === 'running') {
-                    _trendsScrapePollInterval = setInterval(pollScrapeStatus, 2000);
-                } else {
-                    alert("Could not start scraping: " + data.message);
-                    btn.classList.remove('loading'); btn.disabled = false;
-                }
-            } catch(e) {
-                alert("Error starting scrape: " + e);
-                btn.classList.remove('loading'); btn.disabled = false;
-            }
-        }
-
-        async function pollScrapeStatus() {
-            try {
-                const res = await fetch('/api/trends/scrape/status');
-                const data = await res.json();
-                if (data.status === 'running') return;
-                
-                clearInterval(_trendsScrapePollInterval);
-                const btn = document.getElementById('btn-scrape-trends');
-                btn.classList.remove('loading'); btn.disabled = false;
-                
-                if (data.status === 'done') {
-                    alert("Successfully scraped new subreddits/medical articles and synthesized trendy topics!");
-                    fetchTrends();
-                } else if (data.status === 'error') {
-                    alert("Scraping failed: " + data.error);
-                }
-            } catch(e) {
-                console.error("Error polling scrape status:", e);
-            }
-        }
-
         // Content Studio
         function studioImageUrl(path) {
             return path ? `/images/${path.split(/[\\\\/]/).pop()}` : '';
@@ -2541,6 +1882,60 @@ def index():
 
         async function fetchContentStudio() {
             await Promise.all([fetchStudioIdeas(), fetchStudioAssets()]);
+        }
+
+        // ── Automated Lane Rotation ──
+        let _rotationPollInterval = null;
+        async function runLaneRotation() {
+            const btn = document.getElementById('btn-run-rotation');
+            const statusEl = document.getElementById('rotation-status');
+            const count = document.getElementById('rotation-count').value;
+            if (!confirm(`Run automated lane rotation across ${count} lanes now? This runs live research and calls the LLM.`)) return;
+            btn.classList.add('loading'); btn.disabled = true;
+            statusEl.textContent = 'Starting…';
+            try {
+                const res = await fetch('/api/editorial/rotation/run', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({count: parseInt(count, 10)}),
+                });
+                const data = await res.json();
+                if (data.status === 'started' || data.status === 'running') {
+                    _rotationPollInterval = setInterval(pollRotationStatus, 3000);
+                } else {
+                    statusEl.textContent = 'Could not start: ' + (data.message || 'Unknown error');
+                    btn.classList.remove('loading'); btn.disabled = false;
+                }
+            } catch (e) {
+                statusEl.textContent = 'Error starting rotation: ' + e;
+                btn.classList.remove('loading'); btn.disabled = false;
+            }
+        }
+
+        async function pollRotationStatus() {
+            const btn = document.getElementById('btn-run-rotation');
+            const statusEl = document.getElementById('rotation-status');
+            try {
+                const res = await fetch('/api/editorial/rotation/status');
+                const data = await res.json();
+                if (data.status === 'running') {
+                    statusEl.textContent = `Running… (${data.progress || 'working'})`;
+                    return;
+                }
+                clearInterval(_rotationPollInterval);
+                btn.classList.remove('loading'); btn.disabled = false;
+                if (data.status === 'done') {
+                    const lanes = (data.result && data.result.lanes_covered) ? data.result.lanes_covered.join(', ') : '';
+                    statusEl.textContent = `Done. Covered: ${lanes}. Review the new ideas and assets below.`;
+                    fetchContentStudio();
+                } else if (data.status === 'error') {
+                    statusEl.textContent = 'Rotation failed: ' + data.error;
+                } else {
+                    statusEl.textContent = '';
+                }
+            } catch (e) {
+                console.error('Error polling rotation status:', e);
+            }
         }
 
         async function fetchStudioIdeas() {
@@ -2625,7 +2020,6 @@ def index():
                     return;
                 }
                 await fetchStudioAssets();
-                await fetchPins();
                 alert('Assets created. Review them in the panels on the right.');
             } catch(e) {
                 alert('Asset generation error: ' + e);
@@ -3110,7 +2504,7 @@ def index():
         }
 
         // Initial load
-        fetchPins();
+        fetchContentStudio();
         </script>
     </body>
     </html>

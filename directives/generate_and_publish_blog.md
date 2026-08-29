@@ -1,12 +1,22 @@
 # Directive: Generate and Publish Blog from Approved Pin
 
 ## Purpose
-After a Pinterest pin is approved in the dashboard, this directive governs the automated pipeline that:
-1. Generates a full SEO-optimized blog post from the pin's topic
-2. Publishes the blog (with featured image) to WordPress
-3. Posts the pin to Pinterest with the blog URL as the external link
+This directive governs the generic WordPress/Pinterest publishing mechanics: uploading a blog's featured
+image, posting the blog, and posting the linked Pinterest pin. It applies no matter which pipeline produced
+the blog/pin rows.
 
-Publishing is scheduled at **3 times per day** — 8 AM, 12 PM, and 4 PM **US Eastern Time**.
+**Where blog/pin content now comes from**: see `directives/editorial_intelligence_pipeline.md`. Blogs and
+pins are generated through the dashboard's Content Studio tab (manually, per lane/topic, or automatically via
+`python -m execution.pipeline_runner` / the "Run Lane Rotation" button), backed by
+`execution/research/blog_draft_generator.py` (research-backed blog generation) and
+`execution/editorial/content_asset_service.py`. The old Trends tab and its `blog_generator.generate_blog()`
+entrypoint described in earlier versions of this directive have been retired — publishing still happens
+through `wordpress_publisher.py`/`pinterest_publisher.py` exactly as documented below, either via Content
+Studio's direct "Publish to Website"/"Post to Pinterest" buttons or, if you choose to use it, the 3-slots/day
+auto-scheduler this directive documents.
+
+Auto-scheduled publishing runs at **3 times per day** — 8 AM, 12 PM, and 4 PM **US Eastern Time** — for any
+`generated_pins` row with `status = 'approved'`, regardless of which pipeline created it.
 
 ---
 
@@ -22,6 +32,15 @@ Publishing is scheduled at **3 times per day** — 8 AM, 12 PM, and 4 PM **US Ea
 
 ## Full Pipeline Flow
 
+**Content Studio path (current default)**: the blog row already exists (generated via
+`execution/research/blog_draft_generator.py::generate_research_backed_blog`, which picks the Amazon product,
+calls the LLM with the research-backed `blog_generation.txt` prompt, and fills the locked HTML template) by
+the time a human clicks "Publish to Website" / "Post to Pinterest" — those buttons call
+`wordpress_publisher.py`/`pinterest_publisher.py` directly, skipping the scheduler below entirely.
+
+**Auto-scheduler path (optional, still available)**: if a pin is approved with `status='approved'` and no
+blog row yet, the 3-slots/day scheduler picks it up:
+
 ```
 [Dashboard: Pin Approved]
         ↓
@@ -32,9 +51,9 @@ Publishing is scheduled at **3 times per day** — 8 AM, 12 PM, and 4 PM **US Ea
 [Cron: every 5 min → run_scheduled_publishes()]
   → Check publish_schedule WHERE scheduled_time <= now AND status = pending
         ↓
-[blog_generator.py → generate_blog(pin_id)]
-  → Pick approved Amazon product by topic/lane relevance
-  → Call GPT-4o-mini with blog_generation.txt prompt
+[blog_draft_generator.py → generate_research_backed_blog(pin_id)]
+  → Run research for the pin's topic/lane, pick approved Amazon product
+  → Call GPT-4o-mini with the research-backed blog_generation.txt prompt
   → Fill locked HTML template (Blog-Template.md)
   → Save to blogs table
   → Update product last_used
@@ -59,11 +78,12 @@ Publishing is scheduled at **3 times per day** — 8 AM, 12 PM, and 4 PM **US Ea
 
 | Script | Purpose |
 |---|---|
-| `execution/content/blog_generator.py` | Generate blog HTML from pin topic |
+| `execution/research/blog_draft_generator.py` | Generate research-backed blog HTML from a pin's topic/lane |
+| `execution/content/blog_generator.py` | Shared template/product utilities used by the generator above |
 | `execution/content/wordpress_publisher.py` | Upload image + publish post to WP |
 | `execution/content/pinterest_publisher.py` | Post pin with blog link to Pinterest |
-| `execution/content/publish_scheduler.py` | Manage time slots and run due publishes |
-| `execution/dashboard.py` | Flask UI for review; triggers scheduling on approve |
+| `execution/content/publish_scheduler.py` | Manage time slots and run due publishes (optional path; Content Studio usually publishes directly) |
+| `execution/dashboard.py` | Flask UI for review, generation, and publishing (Content Studio / Editorial Lab tabs) |
 
 ---
 
@@ -180,3 +200,4 @@ Opens the auth URL in your browser, catches the callback on port 8888, saves tok
 | 2026-06-10 | Dashboard recipe cards now expose downloads for generated recipe images (`cover.jpg`, `step-1.jpg`, `step-2.jpg`, `step-3.jpg`) and a clean WPRM REST JSON payload (`title`, `status`, `recipe`) for manual import/testing. |
 | 2026-06-15 | Recipe WordPress posts now include explicit inline step-by-step HTML after the WPRM shortcode: each uploaded step image URL is rendered immediately after the matching instruction step. This is a fallback for cases where WPRM ignores `instructions_flat[].image_id`. Recipe generation now includes `kcal_per_serving`; older recipes fall back to a rough ingredient-based kcal estimate in the post's Nutrition Facts block. |
 | 2026-06-19 | Recipe generation now composes a separate Pinterest pin image from the generated hero cover: `recipe_{id}_pinterest.jpg`, exported in downloads as `pinterest-pin.jpg`. Pin size is 1000x2100 (1:2.1), rendered as JPEG under Pinterest's 20MB limit, with a clean borderless white Playfair Display recipe-title overlay at the top. Recipe Pinterest publishing now uploads this separate pin image to WP Media and uses that public media URL for Pinterest; older recipes fall back to the cover image if no `pinterest_image` exists. |
+| 2026-08-29 | The Trends tab and its `blog_generator.generate_blog()` call are retired (see `directives/editorial_intelligence_pipeline.md`). `publish_scheduler.py`'s `execute_single_publish` now calls `execution.research.blog_draft_generator.generate_research_backed_blog(pin_id)` when a pin has no blog row yet — this path is rarely hit in practice since Content Studio generates the blog synchronously before a pin ever reaches "approved" without one. |

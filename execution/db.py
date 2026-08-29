@@ -31,21 +31,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
         
-        # Trends table (from public Reddit JSON / blogs)
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS trend_topics (
-            topic_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT NOT NULL,
-            subreddit TEXT,
-            title TEXT NOT NULL,
-            body TEXT,
-            score INTEGER DEFAULT 0,
-            comment_count INTEGER DEFAULT 0,
-            relevance REAL DEFAULT 0.0,
-            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
-        
-        # Generated ideas (20 per day)
+        # Generated ideas
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS content_ideas (
             idea_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -186,21 +172,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
         
-        # Discovered trendy topics (AI synthesized/medical articles)
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS trendy_topics (
-            topic_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            details TEXT NOT NULL,
-            source TEXT NOT NULL,
-            relevance_score REAL DEFAULT 0.0,
-            content_lane TEXT,
-            angle_type TEXT,
-            freshness_hook TEXT,
-            status TEXT DEFAULT 'pending',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
-
         cursor.execute("PRAGMA table_info(content_ideas)")
         idea_columns = {row[1] for row in cursor.fetchall()}
         for column_name, column_type in {
@@ -211,16 +182,6 @@ def init_db():
         }.items():
             if column_name not in idea_columns:
                 cursor.execute(f"ALTER TABLE content_ideas ADD COLUMN {column_name} {column_type}")
-
-        cursor.execute("PRAGMA table_info(trendy_topics)")
-        trendy_columns = {row[1] for row in cursor.fetchall()}
-        for column_name, column_type in {
-            "content_lane": "TEXT",
-            "angle_type": "TEXT",
-            "freshness_hook": "TEXT",
-        }.items():
-            if column_name not in trendy_columns:
-                cursor.execute(f"ALTER TABLE trendy_topics ADD COLUMN {column_name} {column_type}")
 
         # Research/source intelligence tables for reusable blog/newsletter/app briefs
         cursor.execute('''

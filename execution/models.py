@@ -50,7 +50,11 @@ class IdeaGenerationItem(BaseModel):
         default=None,
         description="Likely source type to verify before writing, e.g. FDA, brand page, Reddit, Google News",
     )
-    
+    grounded_source_urls: List[str] = Field(
+        default_factory=list,
+        description="Real URLs from the discovered signals this idea is actually based on. Empty only if no discovery signal supports it.",
+    )
+
 class IdeaGenerationResponse(BaseModel):
     """Schema for the full list of 20 ideas returned by the LLM."""
     ideas: List[IdeaGenerationItem]
@@ -61,11 +65,6 @@ class CaptionGenerationResponse(BaseModel):
     pin_description: str
     hashtags: List[str]
     alt_text: str
-
-
-class BlogTitleSuggestionResponse(BaseModel):
-    """Schema for suggesting one replacement blog/trend title."""
-    title: str = Field(description="One concise, SEO-friendly title for the approved trend.")
 
 
 class BlogGenerationResponse(BaseModel):
@@ -93,6 +92,18 @@ class BlogGenerationResponse(BaseModel):
     takeaway_4: str
     takeaway_5: str
     category: str = Field(description="Blog category, e.g. 'Gluten-Free Living', 'Recipes', 'Tips'")
+    source_notes: List[str] = Field(
+        default_factory=list,
+        description="Short notes naming which collected sources support the article's important claims.",
+    )
+    verification_notes: List[str] = Field(
+        default_factory=list,
+        description="Any claims that need a fresh official check before publishing, or gaps in the available sources.",
+    )
+    status_recommendation: str = Field(
+        default="ready_for_review",
+        description="'ready_for_review', 'needs_more_sources', or 'do_not_publish_yet' based on how well the collected sources support this article.",
+    )
 
 
 class DraftSection(BaseModel):
@@ -180,29 +191,4 @@ class RecipeGenerationResponse(BaseModel):
     # Image prompts
     cover_image_prompt: str = Field(description="Image-generation prompt for the hero/cover image. Overhead or 45-degree beauty shot of the finished dish in 'The Sunday Light Kitchen'. Warm, natural lighting. Food-focused. Realistic GF textures. No text in image. Vertical 9:16 ratio composition.")
     pinterest_description: str = Field(description="160-char max Pinterest pin description. Mentions GF, the dish, a benefit, and a CTA. Brand voice.")
-
-# =======================
-# Trend Synthesis Models
-# =======================
-
-class TrendyTopicItem(BaseModel):
-    title: str = Field(description="Catchy title of the trend (e.g. 'Air Fryer Gluten Contamination')")
-    details: str = Field(description="A 3-5 sentence explanation of what people are discussing or what the study found, written in brand voice.")
-    source: str = Field(description="Source of the trend, e.g. 'Reddit (r/celiac)' or 'PubMed (Nutrients)'")
-    relevance_score: float = Field(description="Estimated relevance to EGF readers between 0.0 and 1.0")
-    content_lane: Optional[str] = Field(
-        default=None,
-        description="Editorial lane key, e.g. laws_labeling, product_watch, comparison, restaurants_travel",
-    )
-    angle_type: Optional[str] = Field(
-        default=None,
-        description="Editorial format, e.g. comparison, explainer, product_roundup, field_guide, review_test",
-    )
-    freshness_hook: Optional[str] = Field(
-        default=None,
-        description="A short explanation of why this is timely or interesting now",
-    )
-
-class TrendyTopicResponse(BaseModel):
-    topics: List[TrendyTopicItem]
 

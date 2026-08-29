@@ -3,14 +3,11 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from execution.config import PROMPTS_DIR
 from execution.db import get_connection
-from execution.editorial.memory import current_month_label, memory_prompt_block
 from execution.editorial.schema import ensure_editorial_schema
 from execution.editorial.taxonomy import ANGLE_TYPES, CONTENT_LANES, LANES_BY_KEY, ContentLane
-from execution.models import IdeaGenerationItem, IdeaGenerationResponse
+from execution.models import IdeaGenerationItem
 from execution.research.draft_generator import generate_research_draft
-from execution.utils.llm_client import LLMClient
 
 
 DEFAULT_IDEA_COUNT = 3
@@ -57,20 +54,35 @@ def create_lane_ideas(
 
     if sample:
         ideas = _sample_ideas_for_lane(lane, normalized_count, topic_hint)
-        generation_mode = "sample"
-    else:
-        response = _generate_lane_ideas_with_llm(lane, normalized_count, topic_hint)
-        ideas = response.ideas
-        generation_mode = "llm"
+        saved_ideas = _save_lane_ideas(ideas) if persist else [_idea_to_dict(idea) for idea in ideas]
+        return {
+            "lane": _lane_to_dict(lane),
+            "generation_mode": "sample",
+            "persisted": persist,
+            "idea_count": len(saved_ideas),
+            "ideas": saved_ideas,
+        }
 
-    saved_ideas = _save_lane_ideas(ideas) if persist else [_idea_to_dict(idea) for idea in ideas]
+    # Non-sample ideation is discovery-grounded: it runs real research
+    # collectors across the lane before the LLM proposes anything, rather
+    # than brainstorming from the taxonomy description alone. See
+    # execution/editorial/lane_discovery.py.
+    from execution.editorial.lane_discovery import discover_lane_topics
 
+    discovery_result = discover_lane_topics(
+        lane_key=lane.key,
+        idea_count=normalized_count,
+        topic_hint=topic_hint,
+        persist=persist,
+    )
     return {
         "lane": _lane_to_dict(lane),
-        "generation_mode": generation_mode,
+        "generation_mode": "llm",
         "persisted": persist,
-        "idea_count": len(saved_ideas),
-        "ideas": saved_ideas,
+        "idea_count": discovery_result["idea_count"],
+        "ideas": discovery_result["ideas"],
+        "signal_count": discovery_result["signal_count"],
+        "pending_source_count": discovery_result["pending_source_count"],
     }
 
 
@@ -117,31 +129,6 @@ def create_lane_content(
         "platform": platform,
         **result,
     }
-
-
-def _generate_lane_ideas_with_llm(
-    lane: ContentLane,
-    idea_count: int,
-    topic_hint: str | None,
-) -> IdeaGenerationResponse:
-    system_prompt = (PROMPTS_DIR / "brand_system_prompt.txt").read_text(encoding="utf-8")
-    prompt_template = (PROMPTS_DIR / "lane_idea_generation.txt").read_text(encoding="utf-8")
-    user_prompt = prompt_template.format(
-        idea_count=idea_count,
-        current_month=current_month_label(),
-        lane_key=lane.key,
-        lane_label=lane.label,
-        lane_description=lane.description,
-        lane_examples="\n".join(f"- {angle}" for angle in lane.example_angles),
-        recent_titles=memory_prompt_block(limit=80),
-        topic_hint=(topic_hint or "None supplied."),
-    )
-    return LLMClient().generate_structured(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        response_format=IdeaGenerationResponse,
-        task_name=f"{lane.key}_idea_generation",
-    )
 
 
 def _save_lane_ideas(ideas: list[IdeaGenerationItem]) -> list[dict]:

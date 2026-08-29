@@ -10,12 +10,6 @@ CONTENT_IDEA_COLUMNS = {
     "source_hint": "TEXT",
 }
 
-TRENDY_TOPIC_COLUMNS = {
-    "content_lane": "TEXT",
-    "angle_type": "TEXT",
-    "freshness_hook": "TEXT",
-}
-
 
 def ensure_editorial_schema() -> None:
     """Add editorial metadata columns to existing SQLite databases."""
@@ -23,7 +17,6 @@ def ensure_editorial_schema() -> None:
     with get_connection() as conn:
         cursor = conn.cursor()
         _ensure_columns(cursor, "content_ideas", CONTENT_IDEA_COLUMNS)
-        _ensure_columns(cursor, "trendy_topics", TRENDY_TOPIC_COLUMNS)
         conn.commit()
 
 

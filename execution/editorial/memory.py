@@ -80,8 +80,8 @@ def get_recent_topic_memory(limit: int = 150) -> list[PublishedTopic]:
                 "SELECT title, status, created_at FROM generated_pins ORDER BY created_at DESC LIMIT ?",
             ),
             (
-                "trendy_topics",
-                "SELECT title, status, created_at FROM trendy_topics ORDER BY created_at DESC LIMIT ?",
+                "content_drafts",
+                "SELECT title, status, created_at FROM content_drafts ORDER BY created_at DESC LIMIT ?",
             ),
             (
                 "generated_recipes",
