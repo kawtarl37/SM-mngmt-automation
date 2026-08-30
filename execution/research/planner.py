@@ -16,32 +16,39 @@ LANE_SOURCE_TYPES: dict[str, tuple[tuple[str, str], ...]] = {
         ("brand_product_page", "Verify product details, ingredients, allergen statements, and launch claims."),
         ("retailer_product_page", "Check availability, pricing signals, reviews, and supermarket discovery."),
         ("web_search", "Discover the specific product/brand page and recent reviews or launch coverage live."),
+        ("community_discussion", "Find real complaints/praise about this specific product from actual buyers."),
     ),
     "comparison": (
         ("brand_product_page", "Collect official product details for each compared item."),
         ("retailer_product_page", "Compare reviews, price, availability, and specifications."),
         ("web_search", "Find independent taste-test/comparison coverage and current pricing across retailers."),
+        ("community_discussion", "Find real head-to-head opinions and disagreements between the compared items."),
     ),
     "restaurants_travel": (
         ("restaurant_allergen_page", "Verify allergen menu details and official gluten-free claims."),
         ("web_search", "Find recent diner/traveler reporting on this chain, city, or route."),
+        ("community_discussion", "Find recent diner reports of cross-contact incidents, staff handling, or good/bad experiences."),
     ),
     "gadgets_tools": (
         ("tool_product_page", "Verify dimensions, materials, use cases, and manufacturer claims."),
         ("retailer_product_page", "Check reviews, price, and availability."),
         ("web_search", "Find independent reviews and real kitchen use cases for the specific tool."),
+        ("community_discussion", "Find real cross-contact concerns and everyday use complaints for this tool."),
     ),
     "apps_digital": (
         ("app_review_page", "Verify app features, reviews, update history, and pricing."),
         ("web_search", "Find recent user reviews, update notes, and trust/feature complaints."),
+        ("community_discussion", "Find real trust issues, missing features, and workaround discussions."),
     ),
     "organization_life": (
         ("web_search", "Find real routines, systems, and product roundups gluten-free households are actually using."),
         ("tool_product_page", "Find relevant storage, lunch, freezer, and travel tools where useful."),
+        ("community_discussion", "Find the lived problems and workaround systems households are actually using."),
     ),
     "recipe_experiments": (
         ("web_search", "Find what people are trying, craving, or struggling to recreate gluten-free right now."),
         ("brand_product_page", "Verify product ingredients and recommended use if a packaged product is involved."),
+        ("community_discussion", "Find what home cooks say actually worked or failed when they tried this."),
     ),
     "science_health": (
         ("medical_research", "Find current studies or review papers relevant to the topic."),
@@ -50,6 +57,7 @@ LANE_SOURCE_TYPES: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "community_questions": (
         ("web_search", "Capture the real question, emotional context, and recurring advice patterns."),
+        ("community_discussion", "Find the actual real-time question or dilemma as people are asking it, not a paraphrase."),
         ("gluten_free_organization", "Verify any health or safety claims before writing."),
     ),
 }
@@ -104,29 +112,42 @@ def _build_query(topic_title: str, lane: str, source_type: str) -> str:
         return f"{topic_title} gluten free product review ingredients"
     if source_type == "web_search":
         return _web_search_query(topic_title, lane)
+    if source_type == "community_discussion":
+        # The OR-group is a hard requirement, not decoration: without it a
+        # loosely-matched site:reddit.com query can return results with no
+        # actual connection to gluten-free/celiac content (seen in testing:
+        # a completely unrelated sports thread came back for a query that
+        # didn't force this).
+        return f'site:reddit.com {topic_title} ("gluten free" OR "gluten-free" OR celiac)'
     if lane == "comparison":
         return f"{topic_title} comparison reviews gluten free"
     return f"{topic_title} gluten free discussion"
 
 
 def _web_search_query(topic_title: str, lane: str) -> str:
-    """Seed query for the live web-search collector, tuned per lane."""
+    """Seed query for the live web-search collector, tuned per lane.
+
+    Phrasing leans toward problems/advice ("worth it", "avoid", "tips",
+    "mistakes") rather than generic "review" language, since that's what
+    actually surfaces complaint and advice content instead of just
+    marketing-adjacent product pages.
+    """
 
     if lane == "laws_labeling":
-        return f"{topic_title} gluten-free news"
+        return f"{topic_title} gluten-free news what it means for shoppers"
     if lane in {"product_watch", "comparison"}:
-        return f"{topic_title} gluten free review"
+        return f"{topic_title} gluten free worth it review problems"
     if lane == "restaurants_travel":
-        return f"{topic_title} gluten free menu OR travel"
+        return f"{topic_title} gluten free safe eat tips problems"
     if lane == "gadgets_tools":
-        return f"{topic_title} gluten free kitchen review"
+        return f"{topic_title} gluten free kitchen review tips mistakes"
     if lane == "apps_digital":
-        return f"{topic_title} app review gluten free"
+        return f"{topic_title} app review gluten free problems missing features"
     if lane == "organization_life":
-        return f"{topic_title} gluten free household system"
+        return f"{topic_title} gluten free household system tips how to"
     if lane == "recipe_experiments":
-        return f"{topic_title} gluten free recipe"
+        return f"{topic_title} gluten free recipe tips mistakes"
     if lane == "science_health":
-        return f"{topic_title} celiac gluten-free news"
-    return f"{topic_title} gluten free"
+        return f"{topic_title} celiac gluten-free explained what it means"
+    return f"{topic_title} gluten free advice"
 

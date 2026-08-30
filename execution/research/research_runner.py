@@ -140,7 +140,7 @@ def _collectors_for_task(task: ResearchTask) -> list[SourceCollector]:
         return [CeliacDiseaseFoundationCollector(), BeyondCeliacCollector()]
     if task.source_type == "medical_research":
         return [PubMedCollector()]
-    if task.source_type == "web_search":
+    if task.source_type in {"web_search", "community_discussion"}:
         return [BraveSearchCollector()]
     if task.source_type in {
         "brand_product_page",

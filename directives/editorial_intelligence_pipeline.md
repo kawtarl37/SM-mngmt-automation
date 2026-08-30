@@ -300,6 +300,21 @@ Current implemented collectors:
   still does true open web search with no domain list required. It no longer has a fully free tier either
   (as of Feb 2026): sign-up requires a card on file, ~$5/month in credits (roughly 1,000 queries), then
   billed per query — comfortably covers this project's low volume (a handful of lane-rotation runs/week).
+  Requests are biased by `LANE_FRESHNESS` (a per-lane recency window passed as Brave's `freshness` param —
+  `pw`/`pm`/`py`, or unfiltered for evergreen lanes) and by problem/advice-leaning query phrasing
+  (`planner._web_search_query`) rather than generic "review" language, so results skew toward what's current
+  and toward complaints/advice rather than marketing copy.
+- `community_discussion`: also `BraveSearchCollector`, same class, different query — scoped with
+  `site:reddit.com` plus a hard `("gluten free" OR "gluten-free" OR celiac)` requirement (tested: without
+  that requirement, a loosely-matched query returned a completely unrelated sports thread). Reddit's own API
+  was the original plan for this but is not viable: unauthenticated `.json` access was blocked in May 2026
+  and OAuth is now restricted to approved applications only. Brave still works because it's one of the few
+  engines Reddit hasn't blocked from crawling — it runs its own independent index rather than relicensing
+  another engine's, unlike Bing/DuckDuckGo which now return near-empty Reddit results. Credibility is capped
+  at 0.45 regardless of domain (`CREDIBILITY_COMMUNITY`) — excellent for pain points and language, never a
+  sole factual source, same rule the lane's own `community_discussion` source-registry entry has always
+  stated. Wired into every lane except `laws_labeling` and `science_health`, where facts should stay
+  official-source-led.
 
 Collectors save normalized records into `research_sources`.
 When a fetched source has a usable snippet, the runner creates a conservative `research_facts` entry using the source title and snippet as evidence.
@@ -532,3 +547,5 @@ reviewed and published manually from Content Studio, exactly like manually-gener
 | 2026-08-29 | Added a `web_search` collector (Google Programmable Search) so lanes without a fixed official API/page (product_watch, comparison, restaurants_travel, gadgets_tools, apps_digital, organization_life, recipe_experiments, community_questions) can discover new sources live instead of depending entirely on a manually pre-curated priority list. Still gated by the existing source-approval flow. |
 | 2026-08-29 | Blog generation is now research-backed (`execution/research/blog_draft_generator.py`), closing the gap where blog text was written from a title + 160-character Pinterest caption with no source grounding, unlike the newsletter/pinterest paths. |
 | 2026-08-29 | Google was the original choice for the `web_search` collector but turned out to be a dead end: Google's Custom Search JSON API is closed to new customers (Google's own docs: "not available for new customers"), and Google Programmable Search Engine no longer offers whole-web search to newly created engines at all — new engines are capped to a fixed list of domains specified at creation (no more "search the entire web" toggle). Switched to the Brave Web Search API instead, which still does true open web search. Also note: Brave dropped its fully-free, no-card tier in Feb 2026 — it now requires a card on file, ~$5/month credit (~1,000 queries), then billed per query. |
+| 2026-08-29 | Added freshness biasing (Brave's `freshness` param, per-lane) and problem/advice-leaning query phrasing to the `web_search` collector, and brought `community_discussion` back to life via a `site:reddit.com`-scoped Brave query (capped credibility) since a dedicated Reddit API collector is not viable — Reddit blocked unauthenticated `.json` access in May 2026 and restricted OAuth to approved apps only, but Brave is one of the few engines Reddit still lets crawl it. First test of the untightened Reddit query returned one completely unrelated result (a sports thread); added a hard `("gluten free" OR "gluten-free" OR celiac)` requirement to the query and confirmed the fix on a re-run. |
+| 2026-08-29 | `requirements.txt` was missing `SQLAlchemy` despite `execution/database.py` requiring it — a fresh `pip install -r requirements.txt` would fail on first dashboard import. Fixed. |
