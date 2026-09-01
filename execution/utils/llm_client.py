@@ -1,3 +1,4 @@
+import httpx
 from openai import OpenAI
 from pydantic import BaseModel
 from execution.config import OPENAI_API_KEY, TEXT_PREFERENCE_MODEL
@@ -6,10 +7,18 @@ from execution.utils.logger import setup_logger
 
 logger = setup_logger("llm_client")
 
+# The SDK's default connect timeout (5s) is too tight for some networks --
+# observed real, reproducible ConnectTimeout failures against api.openai.com
+# even though plain connectivity to the same host was fine (a simple GET
+# succeeded well within 8s). A longer connect timeout plus 2 automatic
+# retries makes transient network latency non-fatal without masking a truly
+# broken connection (still fails eventually if the API is actually down).
+_TIMEOUT = httpx.Timeout(60.0, connect=20.0)
+
 class LLMClient:
     def __init__(self):
-        # Initialize OpenAI client 
-        self.client = OpenAI(api_key=OPENAI_API_KEY)
+        # Initialize OpenAI client
+        self.client = OpenAI(api_key=OPENAI_API_KEY, timeout=_TIMEOUT, max_retries=2)
         self.model = TEXT_PREFERENCE_MODEL
 
     def generate_structured(self, system_prompt: str, user_prompt: str, response_format: type[BaseModel], task_name: str = "general") -> BaseModel:
