@@ -17,7 +17,13 @@ from __future__ import annotations
 import json
 
 from execution.config import PROMPTS_DIR
-from execution.content.blog_generator import fill_template, get_relevant_product, load_html_template, mark_product_used
+from execution.content.blog_generator import (
+    _blog_content_problems,
+    fill_template,
+    get_relevant_product,
+    load_html_template,
+    mark_product_used,
+)
 from execution.db import get_connection
 from execution.models import BlogGenerationResponse
 from execution.research.research_runner import run_research
@@ -80,6 +86,7 @@ def generate_blog_content(
         sources_json=json.dumps(research_result["sources"], indent=2),
         product_title=product["title"],
         product_description=product["description"],
+        product_match_notes=product.get("match_notes") or "Matched by topic, lane, and reader pain point.",
     )
     if forced_title:
         user_prompt += (
@@ -88,13 +95,38 @@ def generate_blog_content(
             "Use this exact text for `main_title`. Do not rewrite, expand, shorten, or retitle it."
         )
 
+    client = LLMClient()
     try:
-        content: BlogGenerationResponse = LLMClient().generate_structured(
+        content: BlogGenerationResponse = client.generate_structured(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             response_format=BlogGenerationResponse,
             task_name="blog_generation",
         )
+        # Quality gate: catch outline/placeholder language or too-short
+        # sections and give the model one corrective retry before giving up.
+        problems = _blog_content_problems(content)
+        if problems:
+            retry_prompt = (
+                f"{user_prompt}\n\n"
+                "The previous response was not acceptable for review because: "
+                f"{'; '.join(problems)}.\n\n"
+                "Regenerate a complete final reader-facing blog post. Do not return an outline, "
+                "placeholder, section prompt, or instruction telling an editor what to write later."
+            )
+            content = client.generate_structured(
+                system_prompt=system_prompt,
+                user_prompt=retry_prompt,
+                response_format=BlogGenerationResponse,
+                task_name="blog_generation_retry",
+            )
+            retry_problems = _blog_content_problems(content)
+            if retry_problems:
+                logger.error(
+                    "Generated blog was not saved because it was not final reader-facing copy: %s",
+                    "; ".join(retry_problems),
+                )
+                return None
         if forced_title:
             content.main_title = forced_title
     except Exception as e:
@@ -183,6 +215,7 @@ def generate_research_backed_blog(
         "category": content.category,
         "html_content": final_html,
         "product_id": product["product_id"],
+        "product": product,
         "image_path": pin["image_path"],
         "source_notes": content.source_notes,
         "verification_notes": content.verification_notes,

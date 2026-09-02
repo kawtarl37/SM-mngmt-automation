@@ -6,6 +6,7 @@ Target keyword: {target_keyword}
 Editorial lane: {content_lane}
 Angle type: {angle_type}
 Freshness hook: {freshness_hook}
+Source to verify before publishing: {source_hint}
 
 Requirements:
 - Pin title: curiosity + clarity, max 60 characters
@@ -14,5 +15,7 @@ Requirements:
 - Include 3-5 relevant hashtags
 - SEO: keyword in first sentence
 - Avoid generic beginner phrasing and avoid making every caption about bread or baking.
+- Write final reader-facing Pinterest copy only. Do not return an outline, concept, placeholder, prompt, or instructions for someone else to write later.
+- Be cautious with product, restaurant, legal, labeling, and medical claims. Use only the idea details supplied here, and point readers toward checking the relevant trusted source type when needed.
 
 Return JSON with exactly these fields: pin_title, pin_description, hashtags, alt_text

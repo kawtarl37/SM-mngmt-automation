@@ -192,3 +192,16 @@ class RecipeGenerationResponse(BaseModel):
     cover_image_prompt: str = Field(description="Image-generation prompt for the hero/cover image. Overhead or 45-degree beauty shot of the finished dish in 'The Sunday Light Kitchen'. Warm, natural lighting. Food-focused. Realistic GF textures. No text in image. Vertical 9:16 ratio composition.")
     pinterest_description: str = Field(description="160-char max Pinterest pin description. Mentions GF, the dish, a benefit, and a CTA. Brand voice.")
 
+
+class RecipeTitleIdea(BaseModel):
+    """One recipe title suggestion for review before full generation."""
+
+    title: str = Field(description="Catchy gluten-free recipe title. Max 70 characters.")
+    category: str = Field(description=f"Exactly ONE of: {RECIPE_CATEGORIES}")
+    rationale: str = Field(description="One short reason this recipe is useful, specific, and not redundant.")
+
+
+class RecipeTitleIdeaResponse(BaseModel):
+    """Recipe title suggestions returned before the expensive full recipe/image pipeline."""
+
+    ideas: List[RecipeTitleIdea]

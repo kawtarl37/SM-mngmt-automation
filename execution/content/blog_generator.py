@@ -1,8 +1,10 @@
 import re
+
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from execution.config import AMAZON_ASSOCIATE_TAG, BLOG_TEMPLATE_PATH
+from execution.content.affiliate_products import select_solution_product_for_blog
 from execution.db import get_connection
 from execution.models import BlogGenerationResponse
 from execution.utils.logger import setup_logger
@@ -76,6 +78,15 @@ def get_relevant_product(
     topic_description: str | None = None,
     content_lane: str | None = None,
 ) -> dict | None:
+    """Return a solution-based affiliate product for the blog topic."""
+    return select_solution_product_for_blog(topic_title, topic_description, content_lane)
+
+
+def get_catalog_product(
+    topic_title: str,
+    topic_description: str | None = None,
+    content_lane: str | None = None,
+) -> dict | None:
     """Return the approved Amazon product that best matches the blog topic."""
     topic_tokens = _tokenize(f"{topic_title} {topic_description or ''} {content_lane or ''}")
 
@@ -94,6 +105,7 @@ def get_relevant_product(
                 priority_score,
                 last_used
             FROM amazon_products
+            WHERE COALESCE(active, 1) = 1
         """)
         products = [dict(row) for row in cursor.fetchall()]
 
@@ -185,10 +197,19 @@ def fill_template(template: str, content: BlogGenerationResponse, product: dict)
         html = html.replace(placeholder, value)
 
     # Amazon product block (Make.com-style variables replaced with real data)
+    product_image_url = (product.get("image_url") or "").strip()
+    if not product_image_url:
+        html = re.sub(
+            r"\s*<div class=\"egf-split-card-2025__image\">\s*"
+            r"<img src=\"\{\{49\.`4`\}\}\" alt=\"\{\{49\.`1`\}\}\">\s*"
+            r"</div>",
+            "",
+            html,
+        )
     html = html.replace("{{49.`1`}}", product["title"])
     html = html.replace("{{49.`2`}}", product["description"])
     html = html.replace("{{49.`3`}}", _apply_amazon_associate_tag(product["url"]))
-    html = html.replace("{{49.`4`}}", product["image_url"])
+    html = html.replace("{{49.`4`}}", product_image_url)
 
     # Sanity check — warn if any placeholders remain unfilled
     remaining = re.findall(r"\[([A-Z_0-9]+)\]", html)
@@ -196,3 +217,67 @@ def fill_template(template: str, content: BlogGenerationResponse, product: dict)
         logger.warning(f"Unfilled placeholders detected: {remaining}")
 
     return html
+
+
+# ──────────────────────────────────────────────
+# Quality gate — shared by the research-backed generator
+# ──────────────────────────────────────────────
+
+def _blog_content_problems(content: BlogGenerationResponse) -> list[str]:
+    """Return reasons generated blog content should not enter review."""
+
+    sections = [
+        content.section_1_content,
+        content.section_2_content,
+        content.section_3_content,
+        content.section_4_content,
+        content.section_5_content,
+    ]
+    text = "\n".join(
+        [
+            content.main_title,
+            content.intro_paragraph,
+            content.intro_paragraph_1,
+            content.intro_paragraph_2,
+            content.intro_paragraph_3,
+            content.section_1_title,
+            content.section_2_title,
+            content.section_3_title,
+            content.section_4_title,
+            content.section_5_title,
+            *sections,
+            content.takeaway_1,
+            content.takeaway_2,
+            content.takeaway_3,
+            content.takeaway_4,
+            content.takeaway_5,
+        ]
+    )
+    lower_text = text.lower()
+    problems: list[str] = []
+    outline_markers = (
+        "todo",
+        "tbd",
+        "placeholder",
+        "outline",
+        "section should",
+        "this section should",
+        "write a section",
+        "write an intro",
+        "write copy",
+        "add details",
+        "expand on",
+        "fill in",
+        "insert ",
+        "[",
+        "]",
+    )
+    found_markers = [marker for marker in outline_markers if marker in lower_text]
+    if found_markers:
+        problems.append("contains outline or placeholder language: " + ", ".join(found_markers[:4]))
+    if len(text.split()) < 900:
+        problems.append("too short for a complete blog post")
+    short_sections = [str(index + 1) for index, section in enumerate(sections) if len(section.split()) < 80]
+    if short_sections:
+        problems.append("short blog sections: " + ", ".join(short_sections))
+    return problems

@@ -13,6 +13,7 @@ import sqlite3
 from pathlib import Path
 
 from execution.config import PROMPTS_DIR, DB_PATH
+from execution.content.recipe_idea_service import ensure_recipe_idea_schema, get_recipe_idea, mark_recipe_idea_generated
 from execution.models import RecipeGenerationResponse
 from execution.utils.llm_client import LLMClient
 from execution.utils.logger import setup_logger
@@ -48,6 +49,7 @@ def _save_recipe(
     cover_image: str | None,
     pinterest_image: str | None,
     step_images: list[str | None],
+    recipe_idea_id: int | None = None,
 ) -> int:
     """Insert recipe into generated_recipes table. Returns new recipe_id."""
     payload = recipe.model_dump()
@@ -59,8 +61,8 @@ def _save_recipe(
         """
         INSERT INTO generated_recipes
             (title, category, recipe_json, cover_image, pinterest_image,
-             step_image_1, step_image_2, step_image_3, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+             step_image_1, step_image_2, step_image_3, status, recipe_idea_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
         """,
         (
             recipe.title,
@@ -71,6 +73,7 @@ def _save_recipe(
             step_images[0] if len(step_images) > 0 else None,
             step_images[1] if len(step_images) > 1 else None,
             step_images[2] if len(step_images) > 2 else None,
+            recipe_idea_id,
         ),
     )
     recipe_id = cursor.lastrowid
@@ -103,7 +106,12 @@ def _build_result(recipe_id: int, recipe: RecipeGenerationResponse,
 # Main entry point
 # ─────────────────────────────────────────────
 
-def generate_recipe() -> dict | None:
+def generate_recipe(
+    recipe_idea_id: int | None = None,
+    locked_title: str | None = None,
+    category: str | None = None,
+    dish_request: str | None = None,
+) -> dict | None:
     """
     Full pipeline:
       1. Load prompts
@@ -115,6 +123,12 @@ def generate_recipe() -> dict | None:
     Takes ~25-40s. Designed to run in a background thread (async from API).
     """
     logger.info("Starting recipe generation pipeline...")
+    ensure_recipe_idea_schema()
+    recipe_idea = get_recipe_idea(recipe_idea_id) if recipe_idea_id else None
+    if recipe_idea:
+        locked_title = recipe_idea["suggested_title"]
+        category = recipe_idea["category"]
+        dish_request = recipe_idea.get("dish_request")
 
     # 1. Load prompt
     try:
@@ -127,6 +141,12 @@ def generate_recipe() -> dict | None:
     existing_titles = _get_existing_titles()
     existing_block = "\n".join(f"- {t}" for t in existing_titles) if existing_titles else "(none yet)"
     user_prompt = prompt_template.format(existing_titles=existing_block)
+    if locked_title or category or dish_request:
+        user_prompt += _locked_recipe_direction(
+            locked_title=locked_title,
+            category=category,
+            dish_request=dish_request,
+        )
 
     # 2. LLM call
     client = LLMClient()
@@ -137,6 +157,10 @@ def generate_recipe() -> dict | None:
             response_format=RecipeGenerationResponse,
             task_name="recipe_generation",
         )
+        if locked_title:
+            recipe.title = locked_title
+        if category:
+            recipe.category = category
         logger.info(f"LLM generated recipe: '{recipe.title}' ({recipe.category})")
     except Exception as e:
         logger.error(f"LLM call failed: {e}")
@@ -146,7 +170,9 @@ def generate_recipe() -> dict | None:
     cover_image = None
     pinterest_image = None
     step_images = [None, None, None]
-    recipe_id = _save_recipe(recipe, cover_image, pinterest_image, step_images)
+    recipe_id = _save_recipe(recipe, cover_image, pinterest_image, step_images, recipe_idea_id=recipe_idea_id)
+    if recipe_idea_id:
+        mark_recipe_idea_generated(recipe_idea_id, recipe_id)
 
     # 4. Generate cover image
     try:
@@ -190,3 +216,30 @@ def generate_recipe() -> dict | None:
 
     logger.info(f"Recipe pipeline complete: recipe_id={recipe_id}")
     return _build_result(recipe_id, recipe, cover_image, pinterest_image, step_images)
+
+
+def _locked_recipe_direction(
+    locked_title: str | None,
+    category: str | None,
+    dish_request: str | None,
+) -> str:
+    lines = [
+        "\n\nAPPROVED RECIPE IDEA - FOLLOW EXACTLY:",
+    ]
+    if locked_title:
+        lines.append(f"- Use this exact recipe title: {locked_title}")
+    if category:
+        lines.append(f"- Use this exact category: {category}")
+    if dish_request:
+        lines.append(f"- Original dish request to make gluten-free: {dish_request}")
+    lines.extend(
+        [
+            "- Generate the full recipe for this approved idea only.",
+            "- Do not rename it, switch categories, or make a near-duplicate of an existing approved recipe.",
+        ]
+    )
+    if category == "Bake / Make It Yourself":
+        lines.append(
+            "- If this is a bread idea, make it a true from-scratch gluten-free bread recipe with honest texture cues."
+        )
+    return "\n".join(lines)

@@ -24,6 +24,7 @@ from execution.config import DB_PATH, TMP_PINS_DIR, SANDBOX_MODE
 from execution.content.recipe_generator import generate_recipe
 from execution.content.recipe_wp_publisher import build_wprm_import_payload, publish_recipe_to_wp, upload_recipe_image_to_wp
 from execution.content.pinterest_publisher import post_pin_to_pinterest
+from execution.content.publish_scheduler import execute_single_publish, run_scheduled_publishes
 
 # ── Async recipe generation task store ──────────────────────────────────────
 # task_id → {"status": "running"|"done"|"error", "result": dict|None, "error": str}
@@ -32,7 +33,10 @@ _RECIPE_TASKS_LOCK = threading.Lock()
 
 # DB initialization imports
 from execution.db import init_db, seed_amazon_products
+from execution.content.affiliate_products import ensure_affiliate_product_schema
+from execution.content.recipe_idea_service import ensure_recipe_idea_schema
 from execution.database import Base, engine
+from execution.knowledge.schema import ensure_knowledge_schema
 
 app = Flask(__name__)
 CORS(app)
@@ -145,6 +149,9 @@ def _sample_blog_preview_content(topic_title: str, lane: str):
 # Auto-initialize all databases and tables if they don't exist
 init_db()
 seed_amazon_products()
+ensure_affiliate_product_schema()
+ensure_recipe_idea_schema()
+ensure_knowledge_schema()
 Base.metadata.create_all(bind=engine)
 
 def get_db_connection():
@@ -177,14 +184,281 @@ def _get_recipe_row(recipe_id: int) -> dict | None:
     conn.close()
     return dict(row) if row else None
 
+
+def _image_url_from_path(path_value: str | None) -> str | None:
+    if not path_value:
+        return None
+    return f"/images/{Path(path_value).name}"
+
+
+def _blog_status_filter(status: str | None) -> tuple[str, tuple]:
+    if status == "pending":
+        return "WHERE b.status IN ('generated', 'pending_review')", ()
+    if status == "approved":
+        return "WHERE (b.status IN ('approved', 'published') OR b.wp_url IS NOT NULL)", ()
+    if status in {"generated", "pending_review", "rejected", "deleted", "published"}:
+        return "WHERE b.status = ?", (status,)
+    return "WHERE b.status != 'deleted'", ()
+
+
+def _draft_status_filter(status: str | None) -> tuple[str, tuple]:
+    if status == "pending":
+        return "WHERE platform = 'newsletter' AND status = 'pending_review'", ()
+    if status == "approved":
+        return "WHERE platform = 'newsletter' AND status = 'approved'", ()
+    if status in {"pending_review", "approved", "rejected", "deleted"}:
+        return "WHERE platform = 'newsletter' AND status = ?", (status,)
+    return "WHERE platform = 'newsletter' AND status != 'deleted'", ()
+
+# ──────────────────────────────────────────────
+# API: Pins
+# ──────────────────────────────────────────────
+
+@app.route('/api/pins', methods=['GET'])
+def get_pending_pins():
+    from execution.editorial.schema import ensure_editorial_schema
+    ensure_editorial_schema()
+    status_filter = request.args.get("status", "pending")
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # Left join to accommodate custom pins where idea_id = 0
+    where = "WHERE p.status = ?"
+    params: tuple = (status_filter,)
+    if status_filter == "approved":
+        where = "WHERE p.status IN ('approved', 'posted', 'published')"
+        params = ()
+    elif status_filter == "all":
+        where = "WHERE p.status != 'deleted'"
+        params = ()
+    cursor.execute("""
+        SELECT p.pin_id, p.title, p.description, p.image_path, p.destination_url,
+               p.status, p.seo_keywords, p.created_at,
+               c.content_type, c.content_lane, c.angle_type, c.freshness_hook, c.source_hint,
+               b.blog_id, b.title AS blog_title, b.wp_url,
+               pp.pinterest_id, pp.posted_at
+        FROM generated_pins p
+        LEFT JOIN content_ideas c ON p.idea_id = c.idea_id
+        LEFT JOIN blogs b ON b.pin_id = p.pin_id AND b.status != 'deleted'
+        LEFT JOIN posted_pins pp ON pp.pin_id = p.pin_id
+        """ + where + """
+        GROUP BY p.pin_id
+        ORDER BY p.created_at DESC, p.pin_id DESC
+        LIMIT 100
+    """, params)
+    pins = [dict(row) for row in cursor.fetchall()]
+    for pin in pins:
+        pin["image_url"] = _image_url_from_path(pin.get("image_path"))
+    conn.close()
+    return jsonify(pins)
+
+
+@app.route('/api/pins/<int:pin_id>', methods=['GET'])
+def api_pin_detail(pin_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT p.*,
+               c.content_type, c.content_lane, c.angle_type, c.freshness_hook, c.source_hint,
+               b.blog_id, b.title AS blog_title, b.wp_url,
+               pp.pinterest_id, pp.posted_at
+        FROM generated_pins p
+        LEFT JOIN content_ideas c ON p.idea_id = c.idea_id
+        LEFT JOIN blogs b ON b.pin_id = p.pin_id AND b.status != 'deleted'
+        LEFT JOIN posted_pins pp ON pp.pin_id = p.pin_id
+        WHERE p.pin_id = ?
+        ORDER BY b.blog_id DESC
+        LIMIT 1
+    """, (pin_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"success": False, "error": "Pin not found."}), 404
+    pin = dict(row)
+    pin["image_url"] = _image_url_from_path(pin.get("image_path"))
+    return jsonify({"success": True, "pin": pin})
+
+@app.route('/api/pins/<int:pin_id>/approve', methods=['POST'])
+def approve_pin(pin_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE generated_pins SET status = 'approved' WHERE pin_id = ?", (pin_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": "Pin approved."})
+
+@app.route('/api/pins/<int:pin_id>/reject', methods=['POST'])
+def reject_pin(pin_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    data = request.get_json() or {}
+    reason = data.get("reason", "")
+    cursor.execute(
+        "UPDATE generated_pins SET status = 'rejected', rejection_reason = ? WHERE pin_id = ?",
+        (reason, pin_id)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True})
+
+
+# API: Blogs
+@app.route('/api/blogs', methods=['GET'])
+def api_blogs():
+    status_filter = request.args.get("status")
+    where_sql, params = _blog_status_filter(status_filter)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT b.blog_id, b.pin_id, b.title, b.category, b.product_id, b.wp_post_id,
+               b.wp_url, b.wp_featured_image_id, b.status, b.created_at, b.published_at,
+               p.image_path, p.title AS pin_title, p.description AS pin_description,
+               p.status AS pin_status, p.destination_url,
+               a.title AS product_title
+        FROM blogs b
+        LEFT JOIN generated_pins p ON b.pin_id = p.pin_id
+        LEFT JOIN amazon_products a ON b.product_id = a.product_id
+        """ + where_sql + """
+        ORDER BY b.created_at DESC, b.blog_id DESC
+        LIMIT 100
+    """, params)
+    blogs = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    for blog in blogs:
+        blog["image_url"] = _image_url_from_path(blog.get("image_path"))
+    return jsonify(blogs)
+
+
+@app.route('/api/blogs/<int:blog_id>', methods=['GET'])
+def api_blog_detail(blog_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT b.*, p.image_path, p.title AS pin_title, p.description AS pin_description,
+               p.seo_keywords, p.destination_url, p.status AS pin_status,
+               a.title AS product_title, a.url AS product_url, a.image_url AS product_image_url
+        FROM blogs b
+        LEFT JOIN generated_pins p ON b.pin_id = p.pin_id
+        LEFT JOIN amazon_products a ON b.product_id = a.product_id
+        WHERE b.blog_id = ?
+        LIMIT 1
+    """, (blog_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"success": False, "error": "Blog not found."}), 404
+    blog = dict(row)
+    blog["image_url"] = _image_url_from_path(blog.get("image_path"))
+    return jsonify({"success": True, "blog": blog})
+
+
+@app.route('/api/blogs/<int:blog_id>/approve', methods=['POST'])
+def api_blog_approve(blog_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE blogs SET status = 'approved' WHERE blog_id = ? AND status != 'deleted'", (blog_id,))
+    conn.commit()
+    updated = cursor.rowcount
+    conn.close()
+    if not updated:
+        return jsonify({"success": False, "error": "Blog not found."}), 404
+    return jsonify({"success": True, "message": "Blog approved."})
+
+
+@app.route('/api/blogs/<int:blog_id>/reject', methods=['POST'])
+def api_blog_reject(blog_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE blogs SET status = 'rejected' WHERE blog_id = ? AND status != 'deleted'", (blog_id,))
+    conn.commit()
+    updated = cursor.rowcount
+    conn.close()
+    if not updated:
+        return jsonify({"success": False, "error": "Blog not found."}), 404
+    return jsonify({"success": True})
+
+
+@app.route('/api/blogs/<int:blog_id>', methods=['DELETE'])
+def api_blog_delete(blog_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE blogs SET status = 'deleted' WHERE blog_id = ?", (blog_id,))
+    blog_updated = cursor.rowcount
+    cursor.execute("UPDATE publish_schedule SET status = 'cancelled' WHERE blog_id = ? AND status IN ('pending', 'failed')", (blog_id,))
+    cancelled = cursor.rowcount
+    conn.commit()
+    conn.close()
+    if not blog_updated:
+        return jsonify({"success": False, "error": "Blog not found."}), 404
+    return jsonify({"success": True, "cancelled_schedules": cancelled})
+
+# ──────────────────────────────────────────────
+# API: Publish Schedule Queue
+# ──────────────────────────────────────────────
+
+@app.route('/api/schedule', methods=['GET'])
+def get_schedule():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT s.schedule_id, s.pin_id, s.blog_id, s.scheduled_time, s.status,
+               s.error_message, s.completed_at,
+               p.title as pin_title,
+               b.title AS blog_title, b.wp_url
+        FROM publish_schedule s
+        JOIN generated_pins p ON s.pin_id = p.pin_id
+        LEFT JOIN blogs b ON s.blog_id = b.blog_id
+        WHERE s.status != 'cancelled'
+        ORDER BY s.scheduled_time ASC
+        LIMIT 30
+    """)
+    schedule = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(schedule)
+
+@app.route('/api/schedule/<int:schedule_id>', methods=['DELETE'])
+def api_schedule_cancel(schedule_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE publish_schedule SET status = 'cancelled' WHERE schedule_id = ? AND status IN ('pending', 'failed')",
+        (schedule_id,),
+    )
+    conn.commit()
+    updated = cursor.rowcount
+    conn.close()
+    if not updated:
+        return jsonify({"success": False, "error": "Queue item not found or cannot be cancelled."}), 404
+    return jsonify({"success": True, "message": "Queue item cancelled."})
+
+@app.route('/api/publish/run', methods=['POST'])
+def run_publish():
+    """Manually trigger the scheduled publishes check."""
+    try:
+        run_scheduled_publishes()
+        return jsonify({"success": True, "message": "Publish runner executed successfully."})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/publish/now/<int:pin_id>', methods=['POST'])
+def publish_now(pin_id):
+    """Publish a pin immediately, out of schedule."""
+    try:
+        success = execute_single_publish(pin_id)
+        if success:
+            return jsonify({"success": True, "message": "Pin published immediately."})
+        else:
+            return jsonify({"success": False, "error": "Internal publishing error."}), 500
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 # ──────────────────────────────────────────────
 # API: Recipe Generation (Async)
 # ──────────────────────────────────────────────
 
-def _run_recipe_task(task_id: str):
+def _run_recipe_task(task_id: str, recipe_idea_id: int | None = None):
     """Background worker: generate recipe and store result in _RECIPE_TASKS."""
     try:
-        result = generate_recipe()
+        result = generate_recipe(recipe_idea_id=recipe_idea_id)
         with _RECIPE_TASKS_LOCK:
             if result:
                 _RECIPE_TASKS[task_id] = {"status": "done", "result": result, "error": None}
@@ -199,12 +473,78 @@ def _run_recipe_task(task_id: str):
 @app.route('/api/recipe/generate', methods=['POST'])
 def api_recipe_generate():
     """Start async recipe generation. Returns {task_id} immediately."""
+    data = request.get_json(silent=True) or {}
+    recipe_idea_id = data.get("recipe_idea_id")
     task_id = str(uuid.uuid4())
     with _RECIPE_TASKS_LOCK:
         _RECIPE_TASKS[task_id] = {"status": "running", "result": None, "error": None}
-    t = threading.Thread(target=_run_recipe_task, args=(task_id,), daemon=True)
+    t = threading.Thread(target=_run_recipe_task, args=(task_id, recipe_idea_id), daemon=True)
     t.start()
     return jsonify({"task_id": task_id})
+
+
+@app.route('/api/recipe-ideas/generate', methods=['POST'])
+def api_recipe_ideas_generate():
+    """Generate recipe title ideas only; no full recipe/images yet."""
+    from execution.content.recipe_idea_service import generate_recipe_title_ideas
+
+    data = request.get_json() or {}
+    try:
+        result = generate_recipe_title_ideas(
+            category=data.get("category"),
+            dish_request=data.get("dish_request"),
+            limit=int(data.get("limit", 5)),
+        )
+        return jsonify({"success": True, **result})
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/recipe-ideas', methods=['GET'])
+def api_recipe_ideas_list():
+    """List generated recipe title ideas for dashboard review."""
+    from execution.content.recipe_idea_service import list_recipe_ideas
+
+    try:
+        return jsonify(list_recipe_ideas(
+            status=request.args.get("status"),
+            limit=int(request.args.get("limit", 50)),
+        ))
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/recipe-ideas/<int:idea_id>/approve-generate', methods=['POST'])
+def api_recipe_idea_approve_generate(idea_id):
+    """Approve one recipe title idea and start full recipe/image generation."""
+    from execution.content.recipe_idea_service import get_recipe_idea, mark_recipe_idea_approved
+
+    idea = get_recipe_idea(idea_id)
+    if not idea:
+        return jsonify({"success": False, "error": "Recipe idea not found."}), 404
+    if idea["status"] not in {"pending_review", "approved"}:
+        return jsonify({"success": False, "error": f"Recipe idea is already {idea['status']}."}), 400
+    if idea["status"] == "pending_review" and not mark_recipe_idea_approved(idea_id):
+        return jsonify({"success": False, "error": "Could not approve recipe idea."}), 400
+
+    task_id = str(uuid.uuid4())
+    with _RECIPE_TASKS_LOCK:
+        _RECIPE_TASKS[task_id] = {"status": "running", "result": None, "error": None}
+    t = threading.Thread(target=_run_recipe_task, args=(task_id, idea_id), daemon=True)
+    t.start()
+    return jsonify({"success": True, "task_id": task_id})
+
+
+@app.route('/api/recipe-ideas/<int:idea_id>/reject', methods=['POST'])
+def api_recipe_idea_reject(idea_id):
+    """Reject a recipe title idea before it becomes a full recipe."""
+    from execution.content.recipe_idea_service import reject_recipe_idea
+
+    if reject_recipe_idea(idea_id):
+        return jsonify({"success": True})
+    return jsonify({"success": False, "error": "Recipe idea not found or cannot be rejected."}), 404
 
 
 @app.route('/api/recipe/generate/status/<task_id>', methods=['GET'])
@@ -788,6 +1128,73 @@ def api_newsletter_copy(draft_id):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route('/api/newsletters', methods=['GET'])
+def api_newsletters():
+    status_filter = request.args.get("status")
+    where_sql, params = _draft_status_filter(status_filter)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT *
+        FROM content_drafts
+        """ + where_sql + """
+        ORDER BY created_at DESC, draft_id DESC
+        LIMIT 100
+    """, params)
+    drafts = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(drafts)
+
+
+@app.route('/api/newsletters/<int:draft_id>', methods=['GET'])
+def api_newsletter_detail(draft_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM content_drafts WHERE draft_id = ? AND platform = 'newsletter'", (draft_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"success": False, "error": "Newsletter draft not found."}), 404
+    return jsonify({"success": True, "newsletter": dict(row)})
+
+
+@app.route('/api/newsletters/<int:draft_id>/approve', methods=['POST'])
+def api_newsletter_approve(draft_id):
+    from execution.research.draft_generator import approve_content_draft
+
+    ok = approve_content_draft(draft_id)
+    if not ok:
+        return jsonify({"success": False, "error": "Newsletter draft not found."}), 404
+    return jsonify({"success": True, "message": "Newsletter approved."})
+
+
+@app.route('/api/newsletters/<int:draft_id>/reject', methods=['POST'])
+def api_newsletter_reject(draft_id):
+    from execution.research.draft_generator import reject_content_draft
+
+    data = request.get_json() or {}
+    ok = reject_content_draft(draft_id, data.get("reason", ""))
+    if not ok:
+        return jsonify({"success": False, "error": "Newsletter draft not found."}), 404
+    return jsonify({"success": True})
+
+
+@app.route('/api/newsletters/<int:draft_id>', methods=['DELETE'])
+def api_newsletter_delete(draft_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE content_drafts SET status = 'deleted' WHERE draft_id = ? AND platform = 'newsletter'",
+        (draft_id,),
+    )
+    conn.commit()
+    updated = cursor.rowcount
+    conn.close()
+    if not updated:
+        return jsonify({"success": False, "error": "Newsletter draft not found."}), 404
+    return jsonify({"success": True})
+
+
 @app.route('/api/sources', methods=['GET'])
 def api_sources():
     from execution.research.source_manager import list_sources
@@ -900,6 +1307,183 @@ def api_content_draft_reject(draft_id):
     return jsonify({"success": reject_content_draft(draft_id, data.get("reason", ""))})
 
 
+@app.route('/api/knowledge/stats', methods=['GET'])
+def api_knowledge_stats():
+    from execution.knowledge.service import knowledge_stats
+
+    return jsonify(knowledge_stats())
+
+
+@app.route('/api/knowledge/entries', methods=['GET'])
+def api_knowledge_entries():
+    from execution.knowledge.service import list_knowledge_entries
+
+    min_quality = request.args.get("min_quality")
+    return jsonify(
+        list_knowledge_entries(
+            search=request.args.get("search"),
+            lane=request.args.get("lane"),
+            entry_type=request.args.get("entry_type"),
+            source_type=request.args.get("source_type"),
+            quality_status=request.args.get("quality_status"),
+            min_quality=float(min_quality) if min_quality else None,
+            limit=int(request.args.get("limit", 100)),
+        )
+    )
+
+
+@app.route('/api/knowledge/entries/<int:entry_id>', methods=['GET'])
+def api_knowledge_entry_detail(entry_id):
+    from execution.knowledge.service import get_knowledge_entry
+
+    entry = get_knowledge_entry(entry_id)
+    if not entry:
+        return jsonify({"success": False, "error": "Knowledge entry not found."}), 404
+    return jsonify({"success": True, "entry": entry})
+
+
+@app.route('/api/knowledge/ingest', methods=['POST'])
+def api_knowledge_ingest():
+    from execution.knowledge.service import ingest_current_intelligence, knowledge_stats
+
+    result = ingest_current_intelligence()
+    return jsonify({"success": True, "ingest": result, "stats": knowledge_stats()})
+
+
+@app.route('/api/knowledge/entries/<int:entry_id>/block', methods=['POST'])
+def api_knowledge_entry_block(entry_id):
+    from execution.knowledge.service import set_entry_quality_status
+
+    return jsonify({"success": set_entry_quality_status(entry_id, "blocked")})
+
+
+@app.route('/api/knowledge/entries/<int:entry_id>/restore', methods=['POST'])
+def api_knowledge_entry_restore(entry_id):
+    from execution.knowledge.service import set_entry_quality_status
+
+    return jsonify({"success": set_entry_quality_status(entry_id, "auto_approved")})
+
+
+@app.route('/api/knowledge/entries/<int:entry_id>/mark-stale', methods=['POST'])
+def api_knowledge_entry_mark_stale(entry_id):
+    from execution.knowledge.service import set_entry_quality_status
+
+    return jsonify({"success": set_entry_quality_status(entry_id, "stale")})
+
+
+@app.route('/api/amazon-products', methods=['GET'])
+def api_amazon_products():
+    include_inactive = _request_bool(request.args.get("include_inactive"), False)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    where = "" if include_inactive else "WHERE COALESCE(active, 1) = 1"
+    cursor.execute(f"""
+        SELECT product_id, title, description, url, image_url, keywords,
+               content_lanes, price_tier, priority_score, active, last_used,
+               solution_tags, problem_tags, source_type, media_status,
+               auto_created, needs_manual_image, evidence_notes, match_notes
+        FROM amazon_products
+        {where}
+        ORDER BY COALESCE(active, 1) DESC, title COLLATE NOCASE ASC
+    """)
+    products = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(products)
+
+
+def _amazon_product_payload() -> tuple[dict, list[str]]:
+    data = request.get_json() or {}
+    payload = {
+        "title": (data.get("title") or "").strip(),
+        "description": (data.get("description") or "").strip(),
+        "url": (data.get("url") or "").strip(),
+        "image_url": (data.get("image_url") or "").strip(),
+        "keywords": (data.get("keywords") or "").strip(),
+        "content_lanes": (data.get("content_lanes") or "").strip(),
+        "price_tier": (data.get("price_tier") or "affordable").strip() or "affordable",
+        "priority_score": float(data.get("priority_score") or 1.0),
+        "active": 1 if _request_bool(data.get("active"), True) else 0,
+    }
+    required = ["title", "description", "url"]
+    missing = [field for field in required if not payload[field]]
+    return payload, missing
+
+
+@app.route('/api/amazon-products', methods=['POST'])
+def api_amazon_product_create():
+    try:
+        payload, missing = _amazon_product_payload()
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "priority_score must be a number."}), 400
+    if missing:
+        return jsonify({"success": False, "error": f"Missing fields: {', '.join(missing)}"}), 400
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO amazon_products
+            (title, description, url, image_url, keywords, content_lanes, price_tier,
+             priority_score, media_status, needs_manual_image, active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        payload["title"], payload["description"], payload["url"], payload["image_url"],
+        payload["keywords"], payload["content_lanes"], payload["price_tier"],
+        payload["priority_score"],
+        "complete" if payload["image_url"] else "needs_image",
+        0 if payload["image_url"] else 1,
+        payload["active"],
+    ))
+    product_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "product_id": product_id})
+
+
+@app.route('/api/amazon-products/<int:product_id>', methods=['PUT'])
+def api_amazon_product_update(product_id):
+    try:
+        payload, missing = _amazon_product_payload()
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "priority_score must be a number."}), 400
+    if missing:
+        return jsonify({"success": False, "error": f"Missing fields: {', '.join(missing)}"}), 400
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE amazon_products
+        SET title = ?, description = ?, url = ?, image_url = ?, keywords = ?,
+            content_lanes = ?, price_tier = ?, priority_score = ?,
+            media_status = ?, needs_manual_image = ?, active = ?
+        WHERE product_id = ?
+    """, (
+        payload["title"], payload["description"], payload["url"], payload["image_url"],
+        payload["keywords"], payload["content_lanes"], payload["price_tier"],
+        payload["priority_score"],
+        "complete" if payload["image_url"] else "needs_image",
+        0 if payload["image_url"] else 1,
+        payload["active"],
+        product_id,
+    ))
+    conn.commit()
+    updated = cursor.rowcount
+    conn.close()
+    if not updated:
+        return jsonify({"success": False, "error": "Product not found."}), 404
+    return jsonify({"success": True})
+
+
+@app.route('/api/amazon-products/<int:product_id>', methods=['DELETE'])
+def api_amazon_product_delete(product_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE amazon_products SET active = 0 WHERE product_id = ?", (product_id,))
+    conn.commit()
+    updated = cursor.rowcount
+    conn.close()
+    if not updated:
+        return jsonify({"success": False, "error": "Product not found."}), 404
+    return jsonify({"success": True})
+
+
 @app.route('/api/amazon-products/match', methods=['POST'])
 def api_amazon_product_match():
     from urllib.parse import urlparse
@@ -941,6 +1525,9 @@ def api_amazon_product_match():
             "keywords": product.get("keywords"),
             "content_lanes": product.get("content_lanes"),
             "price_tier": product.get("price_tier"),
+            "media_status": product.get("media_status"),
+            "needs_manual_image": bool(product.get("needs_manual_image")),
+            "match_notes": product.get("match_notes"),
             "final_url": final_url,
         },
         "affiliate_status": affiliate_status,
@@ -1031,6 +1618,9 @@ def api_blog_preview_generate():
             "description": product["description"],
             "image_url": product["image_url"],
             "content_lanes": product.get("content_lanes"),
+            "media_status": product.get("media_status"),
+            "needs_manual_image": bool(product.get("needs_manual_image")),
+            "match_notes": product.get("match_notes"),
         },
     })
 
@@ -1116,6 +1706,43 @@ def index():
             .tab-content{display:none}
             .tab-content.active{display:block}
             .empty{text-align:center;padding:60px 20px;color:#aaa;font-size:1rem;grid-column:1/-1}
+            .review-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px;align-items:start}
+            .review-panel{background:white;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.07);border:1px solid #edf0f2;padding:16px}
+            .review-panel h3{font-size:.98rem;color:#1a1a2e;margin-bottom:6px}
+            .review-panel p{font-size:.8rem;color:#666;line-height:1.5;margin-bottom:12px}
+            .asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+            .asset-card{background:white;border:1px solid #edf0f2;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.06);overflow:hidden;cursor:pointer;transition:transform .15s,box-shadow .15s}
+            .asset-card:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.11)}
+            .asset-card-body{padding:13px}
+            .asset-title{font-size:.96rem;font-weight:800;color:#1a1a2e;line-height:1.3;margin-bottom:6px}
+            .asset-copy{font-size:.8rem;color:#555;line-height:1.5;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+            .asset-thumb{width:100%;height:180px;object-fit:cover;background:#eef2f7;display:block}
+            .asset-thumb.pin{height:300px}
+            .asset-actions{display:flex;gap:8px;flex-wrap:wrap;padding:0 13px 13px}
+            .btn-muted{background:#eef2f7;color:#1f2937;flex:none;padding:8px 12px}
+            .btn-danger{background:#f8d7da;color:#842029;flex:none;padding:8px 12px}
+            .safety-box{background:#fff8e1;border:1px solid #ffe08a;border-radius:10px;padding:10px;margin:12px 0;font-size:.84rem;color:#6b4e00}
+            .safety-box label{display:flex;gap:8px;align-items:flex-start;line-height:1.4}
+            .detail-overlay{position:fixed;inset:0;background:rgba(8,12,22,.62);display:none;align-items:center;justify-content:center;z-index:1100;padding:24px}
+            .detail-overlay.active{display:flex}
+            .detail-modal{background:white;border-radius:14px;box-shadow:0 20px 70px rgba(0,0,0,.35);width:min(1040px,96vw);max-height:92vh;display:flex;flex-direction:column;overflow:hidden}
+            .detail-header{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 18px;border-bottom:1px solid #edf0f2}
+            .detail-title{font-size:1rem;font-weight:800;color:#1a1a2e}
+            .detail-body{padding:18px;overflow:auto}
+            .detail-actions{display:flex;gap:8px;flex-wrap:wrap;padding:13px 18px;border-top:1px solid #edf0f2;background:#fbfcfd}
+            .detail-image{width:100%;max-height:420px;object-fit:contain;background:#eef2f7;border-radius:10px;margin-bottom:14px}
+            .blog-frame{width:100%;height:68vh;border:1px solid #edf0f2;border-radius:10px;background:white}
+            .product-toolbar{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px}
+            .product-table-wrap{background:white;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.07);overflow:auto}
+            .product-table{width:100%;border-collapse:collapse;min-width:980px}
+            .product-table th{background:#1a1a2e;color:white;text-align:left;padding:10px 12px;font-size:.78rem}
+            .product-table td{padding:10px 12px;border-bottom:1px solid #edf0f2;font-size:.8rem;vertical-align:top}
+            .product-table tr.muted{opacity:.55}
+            .product-img{width:64px;height:64px;object-fit:cover;border-radius:8px;background:#eef2f7}
+            .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+            .form-grid .wide{grid-column:1/-1}
+            .form-grid input,.form-grid textarea{width:100%;border:1px solid #d9e0e4;border-radius:8px;padding:9px 10px;font-family:inherit;font-size:.84rem}
+            .form-grid textarea{min-height:80px;resize:vertical}
 
             /* ── Pin Cards (existing tab) ── */
             .pins-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:20px}
@@ -1158,8 +1785,18 @@ def index():
             .modal{background:white;padding:24px;border-radius:14px;max-width:400px;width:100%;box-shadow:0 10px 30px rgba(0,0,0,0.2)}
             .modal h2{font-size:1.1rem;margin-bottom:13px;color:#1a1a2e}
             .modal select{width:100%;padding:10px;margin-bottom:18px;border-radius:6px;border:1px solid #ddd;font-size:.95rem;font-family:inherit}
+            .modal input,.modal textarea{width:100%;padding:10px;margin-bottom:12px;border-radius:6px;border:1px solid #ddd;font-size:.95rem;font-family:inherit}
+            .modal textarea{min-height:76px;resize:vertical}
             .modal .actions{display:flex;gap:8px;justify-content:flex-end}
             .btn-close{background:#eee;color:#333;padding:9px 18px;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-family:inherit}
+            .recipe-idea-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:24px}
+            .recipe-idea-card{background:#fff;border:1px solid #edf0f4;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.06);padding:16px}
+            .recipe-idea-title{font-size:1rem;font-weight:800;color:#1a1a2e;line-height:1.3;margin-bottom:8px}
+            .recipe-idea-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+            .recipe-idea-chip{background:#f3f6f8;border-radius:999px;color:#556070;font-size:.72rem;font-weight:700;padding:4px 9px}
+            .recipe-idea-chip.warn{background:#fff3cd;color:#7a4b00}
+            .recipe-idea-copy{color:#58616d;font-size:.86rem;line-height:1.5;margin-bottom:12px}
+            .recipe-idea-actions{display:flex;gap:8px;flex-wrap:wrap}
 
             /* ── Recipe Generation Loading Overlay ── */
             .recipe-loading-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,20,30,0.88);display:none;flex-direction:column;justify-content:center;align-items:center;z-index:1000;backdrop-filter:blur(4px)}
@@ -1266,6 +1903,22 @@ def index():
             .draft-section strong{display:block;margin-bottom:3px;color:#1a1a2e}
             .source-links{margin-top:8px;display:grid;gap:4px}
             .source-links a{font-size:.76rem;color:#1565c0;word-break:break-word}
+            .kb-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+            .kb-stat{background:white;border:1px solid #edf0f2;border-radius:12px;padding:14px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+            .kb-stat-value{font-size:1.45rem;font-weight:800;color:#1a1a2e}
+            .kb-stat-label{font-size:.74rem;color:#667085;text-transform:uppercase;letter-spacing:.6px;margin-top:3px}
+            .kb-filters{background:white;border:1px solid #edf0f2;border-radius:14px;padding:14px;display:grid;grid-template-columns:1.4fr repeat(5,1fr) auto;gap:10px;align-items:end;margin-bottom:16px}
+            .kb-filters input,.kb-filters select{width:100%;border:1px solid #d9e0e4;border-radius:8px;padding:9px 10px;font-family:inherit;font-size:.84rem;background:white}
+            .kb-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
+            .kb-card{background:white;border:1px solid #edf0f2;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.06);padding:15px;display:flex;flex-direction:column;gap:8px}
+            .kb-title{font-size:.95rem;font-weight:800;color:#1a1a2e;line-height:1.35}
+            .kb-summary{font-size:.82rem;color:#555;line-height:1.5;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+            .kb-meta{display:flex;gap:6px;flex-wrap:wrap}
+            .kb-pill{font-size:.67rem;font-weight:800;text-transform:uppercase;letter-spacing:.55px;background:#eef2f7;color:#46505a;padding:3px 8px;border-radius:999px}
+            .kb-pill.good{background:#d1e7dd;color:#155724}
+            .kb-pill.warn{background:#fff3cd;color:#856404}
+            .kb-pill.bad{background:#f8d7da;color:#842029}
+            .kb-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto}
             .studio-grid{display:grid;grid-template-columns:minmax(320px,.85fr) minmax(520px,1.15fr);gap:20px;align-items:start}
             .studio-stack{display:grid;gap:16px}
             .studio-panel{background:white;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.07);padding:18px;border:1px solid #edf0f2}
@@ -1284,6 +1937,7 @@ def index():
             .btn-pin{background:#e60023;color:white;flex:none;padding:8px 12px}
             .btn-small{flex:none;padding:8px 12px;font-size:.78rem}
             @media(max-width:1080px){.studio-grid{grid-template-columns:1fr}}
+            @media(max-width:1080px){.kb-filters{grid-template-columns:1fr 1fr}.kb-list{grid-template-columns:1fr}}
             @media(max-width:980px){.lab-grid{grid-template-columns:1fr}.lab-row{grid-template-columns:1fr}}
     </style>
     </head>
@@ -1298,14 +1952,20 @@ def index():
             <div class="logo">
                 🌿 Easy Gluten Free
                 <div class="header-actions">
-                    <button class="btn-hdr btn-hdr-recipe" id="btn-gen-recipe" onclick="startRecipeGeneration()">
+                    <button class="btn-hdr btn-hdr-recipe" id="btn-gen-recipe" onclick="openRecipeIdeaModal()">
                         <span class="spinner"></span>🍽️ Generate Recipe
                     </button>
                     <button class="btn-hdr btn-hdr-ghost" onclick="reauthorizePinterest()" title="Re-run Pinterest OAuth">🔑 Re-auth</button>
                 </div>
             </div>
             <nav class="tab-nav">
-                <button class="tab-btn active" id="tabnav-studio" onclick="showTab('tab-studio',this)">Content Studio</button>
+                <button class="tab-btn active" id="tabnav-pending" onclick="showTab('tab-pending',this)">Pending Review</button>
+                <button class="tab-btn" id="tabnav-approved-blogs" onclick="showTab('tab-approved-blogs',this)">Approved Blogs</button>
+                <button class="tab-btn" id="tabnav-approved-pins" onclick="showTab('tab-approved-pins',this)">Approved Pins</button>
+                <button class="tab-btn" id="tabnav-approved-newsletters" onclick="showTab('tab-approved-newsletters',this)">Approved Emails</button>
+                <button class="tab-btn" id="tabnav-amazon" onclick="showTab('tab-amazon',this)">Amazon Products</button>
+                <button class="tab-btn" id="tabnav-knowledge" onclick="showTab('tab-knowledge',this)">Knowledge DB</button>
+                <button class="tab-btn" id="tabnav-studio" onclick="showTab('tab-studio',this)">Content Studio</button>
                 <button class="tab-btn" id="tabnav-editorial" onclick="showTab('tab-editorial',this)">Editorial Lab</button>
                 <button class="tab-btn" id="tabnav-recipes" onclick="showTab('tab-recipes',this)">🍽️ Recipes</button>
             </nav>
@@ -1323,13 +1983,174 @@ def index():
         </div>
 
         <main>
+            <!-- PENDING REVIEW -->
+            <div id="tab-pending" class="tab-content active">
+                <div class="section-header">
+                    <p class="section-title">Pending Review</p>
+                    <button class="btn btn-trigger" onclick="fetchPendingReview()">Refresh</button>
+                </div>
+                <div class="review-grid">
+                    <div class="review-panel">
+                        <h3>Blogs</h3>
+                        <p>Open each article, read the full blog, inspect the linked image, then approve or reject.</p>
+                        <div id="pending-blogs-container" class="studio-list"><div class="empty">Loading blogs...</div></div>
+                    </div>
+                    <div class="review-panel">
+                        <h3>Pins</h3>
+                        <p>Open the image and caption details before approving. Modesty confirmation is required.</p>
+                        <div id="pins-container" class="studio-list"><div class="empty">Loading pins...</div></div>
+                    </div>
+                    <div class="review-panel">
+                        <h3>Newsletter Emails</h3>
+                        <p>Read the complete email draft before approving it for the approved email page.</p>
+                        <div id="pending-newsletters-container" class="studio-list"><div class="empty">Loading emails...</div></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- APPROVED BLOGS -->
+            <div id="tab-approved-blogs" class="tab-content">
+                <div class="section-header">
+                    <p class="section-title">Approved Blogs</p>
+                    <button class="btn btn-trigger" onclick="fetchApprovedBlogs()">Refresh</button>
+                </div>
+                <div id="approved-blogs-container" class="asset-grid"><div class="empty">Loading approved blogs...</div></div>
+            </div>
+
+            <!-- APPROVED PINS -->
+            <div id="tab-approved-pins" class="tab-content">
+                <div class="section-header">
+                    <p class="section-title">Approved Pins</p>
+                    <button class="btn btn-trigger" onclick="fetchApprovedPins()">Refresh</button>
+                </div>
+                <div id="approved-pins-container" class="asset-grid"><div class="empty">Loading approved pins...</div></div>
+            </div>
+
+            <!-- APPROVED NEWSLETTERS -->
+            <div id="tab-approved-newsletters" class="tab-content">
+                <div class="section-header">
+                    <p class="section-title">Approved Newsletter Emails</p>
+                    <button class="btn btn-trigger" onclick="fetchApprovedNewsletters()">Refresh</button>
+                </div>
+                <div id="approved-newsletters-container" class="asset-grid"><div class="empty">Loading approved emails...</div></div>
+            </div>
+
+            <!-- AMAZON PRODUCTS -->
+            <div id="tab-amazon" class="tab-content">
+                <div class="product-toolbar">
+                    <p class="section-title">Amazon Products Catalog</p>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-muted" onclick="fetchAmazonProducts()">Refresh</button>
+                        <button class="btn btn-approve" onclick="openProductModal()">Add New Product</button>
+                    </div>
+                </div>
+                <div class="product-table-wrap">
+                    <table class="product-table">
+                        <thead>
+                            <tr>
+                                <th>Image</th><th>Product</th><th>Description</th><th>Lanes</th><th>Keywords</th><th>Priority</th><th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="amazon-products-body">
+                            <tr><td colspan="7" style="text-align:center;padding:28px;color:#aaa">Loading products...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- KNOWLEDGE DATABASE -->
+            <div id="tab-knowledge" class="tab-content">
+                <div class="section-header">
+                    <p class="section-title">Knowledge DB: Quality-Gated Editorial Memory</p>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-muted" onclick="fetchKnowledgeDb()">Refresh</button>
+                        <button class="btn btn-approve" id="btn-kb-ingest" onclick="ingestKnowledgeDb()">
+                            <span class="spinner"></span>Ingest Current Intelligence
+                        </button>
+                    </div>
+                </div>
+                <div class="kb-stats" id="kb-stats">
+                    <div class="kb-stat"><div class="kb-stat-value">-</div><div class="kb-stat-label">Total</div></div>
+                    <div class="kb-stat"><div class="kb-stat-value">-</div><div class="kb-stat-label">Reusable</div></div>
+                    <div class="kb-stat"><div class="kb-stat-value">-</div><div class="kb-stat-label">Needs Evidence</div></div>
+                    <div class="kb-stat"><div class="kb-stat-value">-</div><div class="kb-stat-label">Blocked/Stale</div></div>
+                </div>
+                <div class="kb-filters">
+                    <input id="kb-search" placeholder="Search facts, feelings, products, restaurants, questions..." onkeydown="if(event.key==='Enter') fetchKnowledgeEntries()">
+                    <select id="kb-lane">
+                        <option value="">All lanes</option>
+                        <option value="product_watch">Product Watch</option>
+                        <option value="laws_labeling">Laws & Labeling</option>
+                        <option value="comparison">Comparisons</option>
+                        <option value="restaurants_travel">Restaurants & Travel</option>
+                        <option value="gadgets_tools">Gadgets & Tools</option>
+                        <option value="apps_digital">Apps & Digital Tools</option>
+                        <option value="organization_life">Organization & Life</option>
+                        <option value="recipe_experiments">Recipe Experiments</option>
+                        <option value="science_health">Science & Health</option>
+                        <option value="community_questions">Community Questions</option>
+                    </select>
+                    <select id="kb-entry-type">
+                        <option value="">All types</option>
+                        <option value="fact">Facts</option>
+                        <option value="community_sentiment">Community Sentiment</option>
+                        <option value="product_mention">Product Mentions</option>
+                        <option value="restaurant_mention">Restaurant Mentions</option>
+                        <option value="app_or_tool_mention">Apps & Tools</option>
+                        <option value="recurring_question">Recurring Questions</option>
+                        <option value="tip_or_system">Tips & Systems</option>
+                        <option value="warning_or_risk">Warnings & Risks</option>
+                    </select>
+                    <select id="kb-quality-status">
+                        <option value="">All statuses</option>
+                        <option value="auto_approved">Reusable</option>
+                        <option value="needs_more_evidence">Needs Evidence</option>
+                        <option value="blocked">Blocked</option>
+                        <option value="stale">Stale</option>
+                    </select>
+                    <select id="kb-source-type">
+                        <option value="">All source types</option>
+                        <option value="official_api">Official API</option>
+                        <option value="official_recall_page">Official Recall Page</option>
+                        <option value="certification_body">Certification Body</option>
+                        <option value="gluten_free_organization">GF Organization</option>
+                        <option value="medical_research">Medical Research</option>
+                        <option value="medical_article">Medical Article</option>
+                        <option value="reddit">Reddit</option>
+                        <option value="restaurant_allergen_page">Restaurant Allergen Page</option>
+                        <option value="brand_product_page">Brand/Product Page</option>
+                        <option value="retailer_product_page">Retailer Product Page</option>
+                        <option value="community_discussion">Community Discussion</option>
+                        <option value="content_draft">Content Draft</option>
+                        <option value="content_brief">Content Brief</option>
+                    </select>
+                    <select id="kb-min-quality">
+                        <option value="">Any score</option>
+                        <option value="0.55">0.55+</option>
+                        <option value="0.72">0.72+</option>
+                        <option value="0.85">0.85+</option>
+                    </select>
+                    <button class="btn btn-trigger" onclick="fetchKnowledgeEntries()">Search</button>
+                </div>
+                <div id="kb-list" class="kb-list"><div class="empty">Click "Ingest Current Intelligence" to build your Knowledge DB.</div></div>
+            </div>
+
             <!-- RECIPES TAB -->
             <div id="tab-recipes" class="tab-content">
                 <div class="section-header">
                     <p class="section-title">Recipe Review Queue</p>
                     <button class="btn btn-trigger" onclick="fetchRecipes()">↻ Refresh</button>
                 </div>
+                <div class="section-divider">
+                    <h3>Recipe Title Ideas</h3>
+                    <p>Approve one title to generate the full recipe, cover image, Pinterest pin, and step images.</p>
+                </div>
+                <div id="recipe-ideas-container" class="recipe-idea-list"><div class="empty">No recipe title ideas yet. Click "Generate Recipe" to suggest names first.</div></div>
                 <!-- Pending Recipes -->
+                <div class="section-divider">
+                    <h3>Pending Full Recipes</h3>
+                    <p>These already have full recipe data and generated images. Review before approval.</p>
+                </div>
                 <div id="recipes-pending-container" class="recipes-grid"><div class="empty">No pending recipes. Click "Generate Recipe" to create one.</div></div>
                 <!-- Approved Recipes -->
                 <div class="section-divider">
@@ -1380,7 +2201,8 @@ def index():
                                         <option value="community_questions">Community Questions</option>
                                     </select>
                                     <select id="studio-idea-count">
-                                        <option value="3">3 ideas</option>
+                                        <option value="1">1 idea</option>
+                                        <option value="3" selected>3 ideas</option>
                                         <option value="5">5 ideas</option>
                                         <option value="8">8 ideas</option>
                                     </select>
@@ -1388,7 +2210,6 @@ def index():
                                 <input id="studio-topic-hint" placeholder="Optional narrowing hint, e.g. Costco snacks, scanner apps, shared kitchen">
                                 <div class="studio-checks">
                                     <label><input type="checkbox" id="studio-sample"> No-token sample mode</label>
-                                    <label><input type="checkbox" id="studio-asset-sample"> Generate assets as samples</label>
                                 </div>
                                 <button class="btn btn-approve" id="btn-studio-generate" onclick="generateStudioIdeas()">
                                     <span class="spinner"></span>Generate Lane Ideas
@@ -1575,6 +2396,75 @@ def index():
             </div>
         </main>
 
+        <!-- Recipe Idea Modal -->
+        <div class="modal-overlay" id="recipe-idea-modal">
+            <div class="modal" style="max-width:520px">
+                <h2>Generate Recipe Title Ideas</h2>
+                <p style="font-size:.87rem;color:#666;margin-bottom:14px">Choose a category or type a dish to make gluten-free. This creates title ideas only; full recipes and images wait for approval.</p>
+                <label style="display:block;font-size:.78rem;font-weight:700;color:#58616d;margin-bottom:6px">Category</label>
+                <select id="recipe-idea-category">
+                    <option value="">Choose a category...</option>
+                    <option value="Bake / Make It Yourself">Bake / Make It Yourself</option>
+                    <option value="Breakfasts That Fuel Your Day">Breakfasts That Fuel Your Day</option>
+                    <option value="Comfort Food Classics (Made Gluten-Free)">Comfort Food Classics (Made Gluten-Free)</option>
+                    <option value="Desserts & Baked Treats">Desserts & Baked Treats</option>
+                    <option value="Meal Prep & Freezer-Friendly Recipes">Meal Prep & Freezer-Friendly Recipes</option>
+                    <option value="Quick & Easy Weeknight Dinners">Quick & Easy Weeknight Dinners</option>
+                </select>
+                <label style="display:block;font-size:.78rem;font-weight:700;color:#58616d;margin-bottom:6px">Or type a dish to make gluten-free</label>
+                <textarea id="recipe-idea-dish" placeholder="Example: sourdough sandwich bread, cinnamon rolls, chicken pot pie, croissants"></textarea>
+                <p style="font-size:.78rem;color:#777;margin:-4px 0 14px">If you fill both, the typed dish wins and the system infers the best category.</p>
+                <div class="actions">
+                    <button class="btn-close" onclick="closeRecipeIdeaModal()">Cancel</button>
+                    <button class="btn btn-approve" id="btn-recipe-idea-submit" onclick="submitRecipeIdeaGeneration()">
+                        <span class="spinner"></span> Suggest Titles
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detail Review Modal -->
+        <div class="detail-overlay" id="detail-overlay">
+            <div class="detail-modal">
+                <div class="detail-header">
+                    <div class="detail-title" id="detail-title">Details</div>
+                    <button class="btn-close" onclick="closeDetailModal()">Close</button>
+                </div>
+                <div class="detail-body" id="detail-body"></div>
+                <div class="detail-actions" id="detail-actions"></div>
+            </div>
+        </div>
+
+        <!-- Amazon Product Modal -->
+        <div class="detail-overlay" id="product-overlay">
+            <div class="detail-modal" style="width:min(760px,96vw)">
+                <div class="detail-header">
+                    <div class="detail-title" id="product-modal-title">Amazon Product</div>
+                    <button class="btn-close" onclick="closeProductModal()">Close</button>
+                </div>
+                <div class="detail-body">
+                    <input type="hidden" id="product-id">
+                    <div class="form-grid">
+                        <input id="product-title" class="wide" placeholder="Product title">
+                        <textarea id="product-description" class="wide" placeholder="Short product description"></textarea>
+                        <input id="product-url" class="wide" placeholder="Amazon/product URL">
+                        <input id="product-image-url" class="wide" placeholder="Image URL (optional; dashboard will flag missing images)">
+                        <input id="product-keywords" placeholder="Keywords, comma separated">
+                        <input id="product-lanes" placeholder="Content lanes, comma separated">
+                        <input id="product-price-tier" placeholder="Price tier" value="affordable">
+                        <input id="product-priority" type="number" min="0" step="0.1" placeholder="Priority score" value="1">
+                        <label class="wide" style="font-size:.84rem;color:#46505a;display:flex;gap:8px;align-items:center">
+                            <input id="product-active" type="checkbox" checked> Active in product matching
+                        </label>
+                    </div>
+                </div>
+                <div class="detail-actions">
+                    <button class="btn btn-close" onclick="closeProductModal()">Cancel</button>
+                    <button class="btn btn-approve" onclick="saveAmazonProduct()">Save Product</button>
+                </div>
+            </div>
+        </div>
+
         <script>
         // ── Sandbox mode: fetch config and show banner ──
         let _sandboxMode = false;
@@ -1595,9 +2485,327 @@ def index():
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             document.getElementById(id).classList.add('active');
             el.classList.add('active');
-            if (id === 'tab-recipes') fetchRecipes();
+            if (id === 'tab-approved-blogs') fetchApprovedBlogs();
+            else if (id === 'tab-approved-pins') fetchApprovedPins();
+            else if (id === 'tab-approved-newsletters') fetchApprovedNewsletters();
+            else if (id === 'tab-amazon') fetchAmazonProducts();
+            else if (id === 'tab-knowledge') fetchKnowledgeDb();
+            else if (id === 'tab-recipes') fetchRecipes();
             else if (id === 'tab-studio') fetchContentStudio();
             else if (id === 'tab-editorial') fetchEditorialLab();
+            else fetchPendingReview();
+        }
+
+        // Review dashboard
+        async function fetchPendingReview() {
+            await Promise.all([fetchPendingBlogs(), fetchPins(), fetchPendingNewsletters()]);
+        }
+
+        async function fetchPendingBlogs() {
+            const list = document.getElementById('pending-blogs-container');
+            try {
+                const blogs = await (await fetch('/api/blogs?status=pending')).json();
+                if (!blogs.length) { list.innerHTML = '<div class="empty">No pending blogs.</div>'; return; }
+                list.innerHTML = blogs.map(blog => buildBlogCard(blog, true)).join('');
+            } catch(e) {
+                list.innerHTML = `<div class="empty">Could not load blogs: ${esc(e)}</div>`;
+            }
+        }
+
+        async function fetchPins() {
+            const list = document.getElementById('pins-container');
+            try {
+                const pins = await (await fetch('/api/pins?status=pending')).json();
+                if (!pins.length) { list.innerHTML = '<div class="empty">No pending pins.</div>'; return; }
+                list.innerHTML = pins.map(pin => buildPinCard(pin, true)).join('');
+            } catch(e) {
+                list.innerHTML = `<div class="empty">Could not load pins: ${esc(e)}</div>`;
+            }
+        }
+
+        async function fetchPendingNewsletters() {
+            const list = document.getElementById('pending-newsletters-container');
+            try {
+                const newsletters = await (await fetch('/api/newsletters?status=pending')).json();
+                if (!newsletters.length) { list.innerHTML = '<div class="empty">No pending emails.</div>'; return; }
+                list.innerHTML = newsletters.map(item => buildNewsletterCard(item, true)).join('');
+            } catch(e) {
+                list.innerHTML = `<div class="empty">Could not load emails: ${esc(e)}</div>`;
+            }
+        }
+
+        function buildBlogCard(blog, pending=false) {
+            const image = blog.image_url ? `<img class="asset-thumb" src="${esc(blog.image_url)}" loading="lazy">` : '<div class="asset-thumb"></div>';
+            const actions = pending
+                ? `<button class="btn btn-approve btn-small" onclick="event.stopPropagation();openBlogDetail(${blog.blog_id}, true)">Read & Review</button>
+                   <button class="btn btn-danger btn-small" onclick="event.stopPropagation();rejectBlog(${blog.blog_id})">Reject</button>`
+                : `<button class="btn btn-wp btn-small" onclick="event.stopPropagation();publishWebsiteAsset(${blog.blog_id}, this)" ${blog.wp_url ? 'disabled' : ''}>${blog.wp_url ? 'Published' : 'Publish'}</button>
+                   <button class="btn btn-danger btn-small" onclick="event.stopPropagation();deleteBlog(${blog.blog_id})">Delete</button>`;
+            return `<div class="asset-card" onclick="openBlogDetail(${blog.blog_id}, ${pending})">
+                ${image}
+                <div class="asset-card-body">
+                    <div class="asset-title">${esc(blog.title)}</div>
+                    <div class="asset-copy">${esc(blog.pin_description || blog.category || '')}</div>
+                    <div class="lab-meta">
+                        <span class="lab-chip ${blog.status === 'approved' ? 'approved' : 'pending'}">${esc(blog.status)}</span>
+                        ${blog.product_title ? `<span class="lab-chip">${esc(blog.product_title)}</span>` : ''}
+                    </div>
+                </div>
+                <div class="asset-actions">${actions}</div>
+            </div>`;
+        }
+
+        function buildPinCard(pin, pending=false) {
+            const image = pin.image_url ? `<img class="asset-thumb pin" src="${esc(pin.image_url)}" loading="lazy">` : '<div class="asset-thumb pin"></div>';
+            const posted = pin.pinterest_id || pin.status === 'posted' || pin.status === 'published';
+            const actions = pending
+                ? `<button class="btn btn-approve btn-small" onclick="event.stopPropagation();openPinDetail(${pin.pin_id}, true)">Review Pin</button>
+                   <button class="btn btn-danger btn-small" onclick="event.stopPropagation();rejectPin(${pin.pin_id})">Reject</button>`
+                : `<button class="btn btn-pin btn-small" onclick="event.stopPropagation();postPinterestAsset(${pin.pin_id}, this)" ${posted ? 'disabled' : ''}>${posted ? 'Posted' : 'Post'}</button>
+                   <button class="btn btn-copy btn-small" onclick="event.stopPropagation();copyPinText(${pin.pin_id})">Copy Text</button>`;
+            return `<div class="asset-card" onclick="openPinDetail(${pin.pin_id}, ${pending})">
+                ${image}
+                <div class="asset-card-body">
+                    <div class="asset-title">${esc(pin.title)}</div>
+                    <div class="asset-copy">${esc(pin.description || '')}</div>
+                    <div class="lab-meta">
+                        <span class="lab-chip ${posted ? 'approved' : (pin.status === 'approved' ? 'approved' : 'pending')}">${posted ? 'posted' : esc(pin.status)}</span>
+                        ${pin.content_lane ? `<span class="lab-chip">${esc(pin.content_lane)}</span>` : ''}
+                    </div>
+                </div>
+                <div class="asset-actions">${actions}</div>
+            </div>`;
+        }
+
+        function buildNewsletterCard(item, pending=false) {
+            const actions = pending
+                ? `<button class="btn btn-approve btn-small" onclick="event.stopPropagation();openNewsletterDetail(${item.draft_id}, true)">Read & Review</button>
+                   <button class="btn btn-danger btn-small" onclick="event.stopPropagation();rejectNewsletter(${item.draft_id})">Reject</button>`
+                : `<button class="btn btn-copy btn-small" onclick="event.stopPropagation();copyNewsletterText(${item.draft_id})">Copy Email Text</button>`;
+            return `<div class="asset-card" onclick="openNewsletterDetail(${item.draft_id}, ${pending})">
+                <div class="asset-card-body">
+                    <div class="asset-title">${esc(item.title)}</div>
+                    <div class="asset-copy">${esc(item.dek || item.topic_title || '')}</div>
+                    <div class="lab-meta">
+                        <span class="lab-chip ${item.status === 'approved' ? 'approved' : 'pending'}">${esc(item.status)}</span>
+                        <span class="lab-chip">${esc(item.lane || '')}</span>
+                    </div>
+                </div>
+                <div class="asset-actions">${actions}</div>
+            </div>`;
+        }
+
+        function checkEmpty(cid, html) { const c=document.getElementById(cid); if(c&&!c.querySelector('.pin-card,.recipe-card,.asset-card')) c.innerHTML=html; }
+
+        function openDetailModal(title, bodyHtml, actionsHtml='') {
+            document.getElementById('detail-title').textContent = title;
+            document.getElementById('detail-body').innerHTML = bodyHtml;
+            document.getElementById('detail-actions').innerHTML = actionsHtml;
+            document.getElementById('detail-overlay').classList.add('active');
+        }
+
+        function closeDetailModal() {
+            document.getElementById('detail-overlay').classList.remove('active');
+            document.getElementById('detail-body').innerHTML = '';
+            document.getElementById('detail-actions').innerHTML = '';
+        }
+
+        function safetyGate(kind, approveCall) {
+            return `<div class="safety-box">
+                <label><input type="checkbox" id="safety-check" onchange="document.getElementById('detail-approve-btn').disabled=!this.checked">
+                I reviewed the full ${kind} and confirm the image is modest and appropriate.</label>
+            </div>
+            <button class="btn btn-approve" id="detail-approve-btn" disabled onclick="${approveCall}">Accept</button>`;
+        }
+
+        async function openBlogDetail(blogId, pending=false) {
+            const data = await (await fetch(`/api/blogs/${blogId}`)).json();
+            if (!data.success) { alert(data.error || 'Could not load blog.'); return; }
+            const b = data.blog;
+            const image = b.image_url ? `<img class="detail-image" src="${esc(b.image_url)}" alt="">` : '<div class="safety-box">No linked image found for this blog.</div>';
+            const body = `${image}<iframe class="blog-frame" id="blog-frame-preview"></iframe>`;
+            const actions = pending
+                ? `${safetyGate('blog article and linked image', `approveBlog(${blogId})`)}
+                   <button class="btn btn-reject" onclick="rejectBlog(${blogId})">Reject</button>`
+                : `<button class="btn btn-wp" onclick="publishWebsiteAsset(${blogId}, this)" ${b.wp_url ? 'disabled' : ''}>${b.wp_url ? 'Published' : 'Publish to Website'}</button>
+                   ${b.wp_url ? `<a class="btn btn-copy" href="${esc(b.wp_url)}" target="_blank" rel="noopener" style="text-decoration:none;text-align:center">Open Published Post</a>` : ''}
+                   <button class="btn btn-danger" onclick="deleteBlog(${blogId})">Delete Blog</button>`;
+            openDetailModal(b.title || 'Blog', body, actions);
+            document.getElementById('blog-frame-preview').srcdoc = b.html_content || '<p>No blog content found.</p>';
+        }
+
+        async function openPinDetail(pinId, pending=false) {
+            const data = await (await fetch(`/api/pins/${pinId}`)).json();
+            if (!data.success) { alert(data.error || 'Could not load pin.'); return; }
+            const p = data.pin;
+            const image = p.image_url ? `<img class="detail-image" src="${esc(p.image_url)}" alt="">` : '<div class="safety-box">No pin image found.</div>';
+            const body = `${image}
+                <div class="draft-section"><strong>Caption</strong>${esc(p.description || '')}</div>
+                <div class="draft-section"><strong>Keywords</strong>${esc(p.seo_keywords || 'N/A')}</div>
+                <div class="draft-section"><strong>Destination</strong>${p.destination_url ? `<a href="${esc(p.destination_url)}" target="_blank" rel="noopener">${esc(p.destination_url)}</a>` : 'No destination URL yet.'}</div>
+                ${p.blog_id ? `<div class="draft-section"><strong>Linked blog</strong>${esc(p.blog_title || '')}</div>` : ''}`;
+            const actions = pending
+                ? `${safetyGate('pin image and caption', `approvePin(${pinId})`)}
+                   <button class="btn btn-reject" onclick="rejectPin(${pinId})">Reject</button>`
+                : `<button class="btn btn-pin" onclick="postPinterestAsset(${pinId}, this)" ${p.pinterest_id ? 'disabled' : ''}>${p.pinterest_id ? 'Posted' : 'Post to Pinterest'}</button>
+                   <button class="btn btn-copy" onclick="copyPinText(${pinId})">Copy Text</button>
+                   ${p.image_url ? `<button class="btn btn-copy" onclick="copyPinImage('${esc(p.image_url)}')">Copy Image</button>` : ''}`;
+            openDetailModal(p.title || 'Pin', body, actions);
+        }
+
+        function newsletterHtml(draft) {
+            let content = {};
+            let sources = [];
+            try { content = JSON.parse(draft.content_json || '{}'); } catch(_) {}
+            try { sources = JSON.parse(draft.source_urls_json || '[]'); } catch(_) {}
+            const sections = (content.sections || []).map(section => `
+                <div class="draft-section"><strong>${esc(section.heading || 'Section')}</strong>${esc(section.body || '')}</div>
+            `).join('');
+            const sourceLinks = sources.map(url => `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>`).join('');
+            return `<div class="draft-dek">${esc(draft.dek || '')}</div>
+                ${sections || `<div class="draft-section">${esc(draft.topic_title || '')}</div>`}
+                ${content.call_to_action ? `<div class="draft-section"><strong>CTA</strong>${esc(content.call_to_action)}</div>` : ''}
+                ${sourceLinks ? `<div class="source-links"><strong>Sources</strong>${sourceLinks}</div>` : ''}`;
+        }
+
+        async function openNewsletterDetail(draftId, pending=false) {
+            const data = await (await fetch(`/api/newsletters/${draftId}`)).json();
+            if (!data.success) { alert(data.error || 'Could not load email.'); return; }
+            const n = data.newsletter;
+            const actions = pending
+                ? `<button class="btn btn-approve" onclick="approveNewsletter(${draftId})">Accept</button>
+                   <button class="btn btn-reject" onclick="rejectNewsletter(${draftId})">Reject</button>`
+                : `<button class="btn btn-copy" onclick="copyNewsletterText(${draftId})">Copy Email Text</button>`;
+            openDetailModal(n.title || 'Newsletter Email', newsletterHtml(n), actions);
+        }
+
+        async function approveBlog(id) {
+            const data = await (await fetch(`/api/blogs/${id}/approve`, {method:'POST'})).json();
+            if (data.success) { closeDetailModal(); await fetchPendingBlogs(); await fetchApprovedBlogs(); }
+            else alert(data.error || 'Could not approve blog.');
+        }
+
+        async function rejectBlog(id) {
+            if (!confirm('Reject this blog?')) return;
+            const data = await (await fetch(`/api/blogs/${id}/reject`, {method:'POST'})).json();
+            if (data.success) { closeDetailModal(); fetchPendingBlogs(); }
+            else alert(data.error || 'Could not reject blog.');
+        }
+
+        async function deleteBlog(id) {
+            if (!confirm('Delete this blog from the dashboard? This is a soft delete and will cancel pending queue rows.')) return;
+            const data = await (await fetch(`/api/blogs/${id}`, {method:'DELETE'})).json();
+            if (data.success) { closeDetailModal(); await fetchApprovedBlogs(); await fetchPendingBlogs(); }
+            else alert(data.error || 'Could not delete blog.');
+        }
+
+        async function approvePin(id) {
+            const data = await (await fetch(`/api/pins/${id}/approve`,{method:'POST'})).json();
+            if (data.success) { closeDetailModal(); await fetchPins(); await fetchApprovedPins(); }
+            else alert(data.error || 'Could not approve pin.');
+        }
+
+        async function rejectPin(id) {
+            const reason = prompt('Rejection reason (optional):') || '';
+            const data = await (await fetch(`/api/pins/${id}/reject`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason})})).json();
+            if (data.success) { closeDetailModal(); fetchPins(); }
+            else alert(data.error || 'Could not reject pin.');
+        }
+
+        async function approveNewsletter(id) {
+            const data = await (await fetch(`/api/newsletters/${id}/approve`, {method:'POST'})).json();
+            if (data.success) { closeDetailModal(); await fetchPendingNewsletters(); await fetchApprovedNewsletters(); }
+            else alert(data.error || 'Could not approve email.');
+        }
+
+        async function rejectNewsletter(id) {
+            const reason = prompt('Rejection reason (optional):') || '';
+            const data = await (await fetch(`/api/newsletters/${id}/reject`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason})})).json();
+            if (data.success) { closeDetailModal(); fetchPendingNewsletters(); }
+            else alert(data.error || 'Could not reject email.');
+        }
+
+        async function fetchApprovedBlogs() {
+            const list = document.getElementById('approved-blogs-container');
+            const blogs = await (await fetch('/api/blogs?status=approved')).json();
+            list.innerHTML = blogs.length ? blogs.map(blog => buildBlogCard(blog, false)).join('') : '<div class="empty">No approved blogs yet.</div>';
+        }
+
+        async function fetchApprovedPins() {
+            const list = document.getElementById('approved-pins-container');
+            const pins = await (await fetch('/api/pins?status=approved')).json();
+            list.innerHTML = pins.length ? pins.map(pin => buildPinCard(pin, false)).join('') : '<div class="empty">No approved pins yet.</div>';
+        }
+
+        async function fetchApprovedNewsletters() {
+            const list = document.getElementById('approved-newsletters-container');
+            const newsletters = await (await fetch('/api/newsletters?status=approved')).json();
+            list.innerHTML = newsletters.length ? newsletters.map(item => buildNewsletterCard(item, false)).join('') : '<div class="empty">No approved newsletter emails yet.</div>';
+        }
+
+        // ── Schedule ──
+        async function fetchSchedule() {
+            const rows = await (await fetch('/api/schedule')).json();
+            const tbody = document.getElementById('schedule-body');
+            if (!rows.length) { tbody.innerHTML='<tr><td colspan="6" style="text-align:center;padding:28px;color:#aaa">No scheduled publishes yet.</td></tr>'; return; }
+            tbody.innerHTML = rows.map((r,i) => {
+                const estTime = new Date(r.scheduled_time).toLocaleString('en-US',{timeZone:'America/New_York',dateStyle:'medium',timeStyle:'short'});
+                const statusCls = `status-${r.status}`;
+                let link = r.wp_url ? `<a href="${r.wp_url}" target="_blank" style="color:#27ae60;font-weight:600">View Post</a>` : (r.blog_title ? esc(r.blog_title) : '-');
+                const err = r.error_message ? `<span class="error-text" title="${r.error_message}">${r.error_message}</span>` : '';
+                const actions = (r.status==='pending'||r.status==='failed')
+                    ? `<button class="btn btn-publish" onclick="initiatePostNow(${r.pin_id},this)"><span class="spinner"></span>Post Now</button>
+                       <button class="btn btn-danger btn-small" onclick="cancelSchedule(${r.schedule_id})">Cancel</button>`
+                    : '';
+                return `<tr><td>${i+1}</td><td>${r.pin_title}</td><td>${estTime}</td>
+                    <td><span class="status-badge ${statusCls}">${r.status}</span>${err}</td>
+                    <td>${link}</td><td class="action-col">${actions}</td></tr>`;
+            }).join('');
+        }
+        async function cancelSchedule(scheduleId) {
+            if (!confirm('Cancel this queue item? The content will stay available on its approved page.')) return;
+            const data = await (await fetch(`/api/schedule/${scheduleId}`, {method:'DELETE'})).json();
+            if (data.success) fetchSchedule();
+            else alert(data.error || 'Could not cancel queue item.');
+        }
+        async function triggerPublishRunner() {
+            const btn = document.getElementById('btn-run-publish');
+            if (!confirm('Run the publish runner now?')) return;
+            btn.classList.add('loading'); btn.disabled=true;
+            try {
+                const data = await (await fetch('/api/publish/run',{method:'POST'})).json();
+                if (data.success) { alert(data.message); fetchSchedule(); }
+                else alert('Error: '+(data.error||'Unknown'));
+            } catch(e) { alert('Failed: '+e); }
+            btn.classList.remove('loading'); btn.disabled=false;
+        }
+        async function initiatePostNow(pin_id, btnEl) {
+            if (!confirm('Publish this pin immediately? Pinterest authorization will open.')) return;
+            btnEl.classList.add('loading'); btnEl.disabled=true;
+            try {
+                const res = await fetch('/api/oauth/start');
+                const data = await res.json();
+                if (!data.auth_url) throw new Error(data.error||'No auth URL');
+                const popup = window.open(data.auth_url,'pinterest_oauth','width=620,height=720,left=200,top=100');
+                if (!popup) { alert('Popup blocked. Allow popups and retry.'); btnEl.classList.remove('loading'); btnEl.disabled=false; return; }
+                const poll = setInterval(async () => {
+                    try {
+                        const s = await (await fetch('/api/oauth/status')).json();
+                        if (!s.done) return;
+                        clearInterval(poll);
+                        if (popup && !popup.closed) popup.close();
+                        if (!s.success) { alert('Pinterest auth failed: '+(s.error||'Unknown')); btnEl.classList.remove('loading'); btnEl.disabled=false; return; }
+                        await postNow(pin_id, btnEl);
+                    } catch(_) {}
+                }, 800);
+            } catch(e) { alert('OAuth start failed: '+e); btnEl.classList.remove('loading'); btnEl.disabled=false; }
+        }
+        async function postNow(pin_id, btnEl) {
+            try {
+                const data = await (await fetch(`/api/publish/now/${pin_id}`,{method:'POST'})).json();
+                if (data.success) { alert(data.message); fetchSchedule(); }
+                else { alert('Error: '+data.error); btnEl.classList.remove('loading'); btnEl.disabled=false; }
+            } catch(e) { alert('Request failed: '+e); btnEl.classList.remove('loading'); btnEl.disabled=false; }
         }
 
         // ─────────────────────────────────────────────────────
@@ -1617,7 +2825,48 @@ def index():
         let _stepIdx = 0;
         let _stepInterval = null;
 
-        function startRecipeGeneration() {
+        function openRecipeIdeaModal() {
+            document.getElementById('recipe-idea-category').value = '';
+            document.getElementById('recipe-idea-dish').value = '';
+            document.getElementById('recipe-idea-modal').style.display = 'flex';
+        }
+
+        function closeRecipeIdeaModal() {
+            document.getElementById('recipe-idea-modal').style.display = 'none';
+        }
+
+        async function submitRecipeIdeaGeneration() {
+            const btn = document.getElementById('btn-recipe-idea-submit');
+            const category = document.getElementById('recipe-idea-category').value;
+            const dish = document.getElementById('recipe-idea-dish').value.trim();
+            if (!category && !dish) {
+                alert('Choose a category or type a dish to make gluten-free.');
+                return;
+            }
+            btn.disabled = true;
+            btn.classList.add('loading');
+            try {
+                const data = await (await fetch('/api/recipe-ideas/generate', {
+                    method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({category, dish_request:dish, limit:5})
+                })).json();
+                if (!data.success) {
+                    alert('Could not generate recipe title ideas: ' + (data.error || 'Unknown error'));
+                } else {
+                    closeRecipeIdeaModal();
+                    showTab('tab-recipes', document.getElementById('tabnav-recipes'));
+                    await fetchRecipes();
+                    alert(`Generated ${data.ideas.length} recipe title idea(s). Approve one to create the full recipe with images.`);
+                }
+            } catch(e) {
+                alert('Recipe title idea generation failed: ' + e);
+            }
+            btn.disabled = false;
+            btn.classList.remove('loading');
+        }
+
+        function startRecipeGenerationForIdea(ideaId) {
             const btn = document.getElementById('btn-gen-recipe');
             btn.disabled = true;
             // Show overlay
@@ -1635,15 +2884,14 @@ def index():
                     document.getElementById('recipe-loading-steps').textContent = LOADING_STEPS[_stepIdx];
                 }
             }, 5000);
-            // Fire the async request
-            fetch('/api/recipe/generate', {method:'POST'})
+            fetch(`/api/recipe-ideas/${ideaId}/approve-generate`, {method:'POST'})
                 .then(r => r.json())
                 .then(data => {
-                    if (!data.task_id) throw new Error('No task_id returned');
+                    if (!data.success || !data.task_id) throw new Error(data.error || 'No task_id returned');
                     _recipeTaskId = data.task_id;
                     _recipePollInterval = setInterval(pollRecipeStatus, 2500);
                 })
-                .catch(e => { stopRecipeLoading(); alert('Failed to start recipe generation: ' + e); btn.disabled = false; });
+                .catch(e => { stopRecipeLoading(); alert('Failed to start full recipe generation: ' + e); btn.disabled = false; });
         }
 
         async function pollRecipeStatus() {
@@ -1657,6 +2905,7 @@ def index():
                     // Switch to recipes tab and refresh
                     showTab('tab-recipes', document.getElementById('tabnav-recipes'));
                     fetchRecipes();
+                    fetchRecipeIdeas();
                 } else {
                     alert('Recipe generation failed: ' + (data.error || 'Unknown error. Check server logs.'));
                 }
@@ -1676,11 +2925,69 @@ def index():
 
         // ── Recipe listing ──
         async function fetchRecipes() {
+            await fetchRecipeIdeas();
             const all = await (await fetch('/api/recipes')).json();
             const pending  = all.filter(r => r.status === 'pending');
             const approved = all.filter(r => r.status === 'approved' || r.status === 'published');
             renderRecipes('recipes-pending-container',  pending,  true);
             renderRecipes('recipes-approved-container', approved, false);
+        }
+
+        async function fetchRecipeIdeas() {
+            const container = document.getElementById('recipe-ideas-container');
+            try {
+                const ideas = await (await fetch('/api/recipe-ideas?status=pending_review&limit=30')).json();
+                renderRecipeIdeas(ideas);
+            } catch(e) {
+                container.innerHTML = `<div class="empty">Could not load recipe title ideas: ${esc(e)}</div>`;
+            }
+        }
+
+        function renderRecipeIdeas(ideas) {
+            const container = document.getElementById('recipe-ideas-container');
+            if (!ideas.length) {
+                container.innerHTML = '<div class="empty">No recipe title ideas yet. Click "Generate Recipe" to suggest names first.</div>';
+                return;
+            }
+            container.innerHTML = ideas.map(idea => {
+                const mode = idea.mode === 'custom_dish' ? 'custom dish' : 'category';
+                const warning = idea.duplicate_warning ? `<span class="recipe-idea-chip warn">${esc(idea.duplicate_warning)}</span>` : '';
+                const dish = idea.dish_request ? `<div class="recipe-idea-copy"><strong>Dish request:</strong> ${esc(idea.dish_request)}</div>` : '';
+                return `
+                    <div class="recipe-idea-card" id="recipe-idea-${idea.idea_id}">
+                        <div class="recipe-idea-title">${esc(idea.suggested_title)}</div>
+                        <div class="recipe-idea-meta">
+                            <span class="recipe-idea-chip">${esc(idea.category)}</span>
+                            <span class="recipe-idea-chip">${esc(mode)}</span>
+                            ${Number(idea.duplicate_score || 0) ? `<span class="recipe-idea-chip">similarity ${Number(idea.duplicate_score).toFixed(2)}</span>` : ''}
+                            ${warning}
+                        </div>
+                        ${dish}
+                        <div class="recipe-idea-copy">${esc(idea.rationale || '')}</div>
+                        <div class="recipe-idea-actions">
+                            <button class="btn-recipe-approve" onclick="approveRecipeIdea(${idea.idea_id}, this)">Approve & Generate Full Recipe</button>
+                            <button class="btn-recipe-reject" onclick="rejectRecipeIdea(${idea.idea_id}, this)">Reject</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function approveRecipeIdea(ideaId, btn) {
+            if (!confirm('Approve this recipe title and generate the full recipe with images?')) return;
+            btn.disabled = true;
+            startRecipeGenerationForIdea(ideaId);
+        }
+
+        async function rejectRecipeIdea(ideaId, btn) {
+            if (!confirm('Reject this recipe title idea?')) return;
+            btn.disabled = true;
+            const data = await (await fetch(`/api/recipe-ideas/${ideaId}/reject`, {method:'POST'})).json();
+            if (data.success) fetchRecipeIdeas();
+            else {
+                alert(data.error || 'Could not reject recipe idea.');
+                btn.disabled = false;
+            }
         }
 
         function imgFile(path) { return path ? path.split(/[\\\\/]/).pop() : null; }
@@ -1875,6 +3182,154 @@ def index():
             } catch(e) { alert('Error: '+e); }
         }
 
+        // Knowledge DB
+        async function fetchKnowledgeDb() {
+            await Promise.all([fetchKnowledgeStats(), fetchKnowledgeEntries()]);
+        }
+
+        async function fetchKnowledgeStats() {
+            try {
+                const stats = await (await fetch('/api/knowledge/stats')).json();
+                const blockedStale = (stats.blocked || 0) + (stats.stale || 0);
+                document.getElementById('kb-stats').innerHTML = `
+                    <div class="kb-stat"><div class="kb-stat-value">${stats.total || 0}</div><div class="kb-stat-label">Total</div></div>
+                    <div class="kb-stat"><div class="kb-stat-value">${stats.reusable || 0}</div><div class="kb-stat-label">Reusable</div></div>
+                    <div class="kb-stat"><div class="kb-stat-value">${stats.needs_more_evidence || 0}</div><div class="kb-stat-label">Needs Evidence</div></div>
+                    <div class="kb-stat"><div class="kb-stat-value">${blockedStale}</div><div class="kb-stat-label">Blocked/Stale</div></div>
+                `;
+            } catch(e) {
+                console.error('Knowledge stats failed', e);
+            }
+        }
+
+        async function ingestKnowledgeDb() {
+            const btn = document.getElementById('btn-kb-ingest');
+            btn.classList.add('loading');
+            btn.disabled = true;
+            try {
+                const data = await (await fetch('/api/knowledge/ingest', {method:'POST'})).json();
+                if (!data.success) {
+                    alert(data.error || 'Knowledge ingest failed.');
+                } else {
+                    const ingest = data.ingest || {};
+                    alert(`Knowledge DB updated.\nCreated: ${ingest.entries_created || 0}\nExisting: ${ingest.entries_existing || 0}\nEvidence added: ${ingest.evidence_created || 0}`);
+                    await fetchKnowledgeDb();
+                }
+            } catch(e) {
+                alert('Knowledge ingest failed: ' + e);
+            }
+            btn.classList.remove('loading');
+            btn.disabled = false;
+        }
+
+        async function fetchKnowledgeEntries() {
+            const params = new URLSearchParams();
+            const search = document.getElementById('kb-search').value.trim();
+            const lane = document.getElementById('kb-lane').value;
+            const entryType = document.getElementById('kb-entry-type').value;
+            const qualityStatus = document.getElementById('kb-quality-status').value;
+            const sourceType = document.getElementById('kb-source-type').value;
+            const minQuality = document.getElementById('kb-min-quality').value;
+            if (search) params.set('search', search);
+            if (lane) params.set('lane', lane);
+            if (entryType) params.set('entry_type', entryType);
+            if (qualityStatus) params.set('quality_status', qualityStatus);
+            if (sourceType) params.set('source_type', sourceType);
+            if (minQuality) params.set('min_quality', minQuality);
+            params.set('limit', '120');
+
+            const list = document.getElementById('kb-list');
+            list.innerHTML = '<div class="empty">Loading knowledge entries...</div>';
+            try {
+                const entries = await (await fetch('/api/knowledge/entries?' + params.toString())).json();
+                list.innerHTML = entries.length
+                    ? entries.map(buildKnowledgeCard).join('')
+                    : '<div class="empty">No knowledge entries match these filters.</div>';
+            } catch(e) {
+                list.innerHTML = `<div class="empty">Could not load Knowledge DB: ${esc(e)}</div>`;
+            }
+        }
+
+        function buildKnowledgeCard(entry) {
+            const status = entry.quality_status || 'needs_more_evidence';
+            const statusClass = status === 'auto_approved' ? 'good' : (status === 'blocked' || status === 'stale') ? 'bad' : 'warn';
+            const reuseClass = entry.reuse_allowed ? 'good' : 'warn';
+            const summary = entry.summary || 'No summary captured yet.';
+            return `<div class="kb-card" id="kb-entry-${entry.entry_id}">
+                <div class="kb-title">${esc(entry.claim)}</div>
+                <div class="kb-summary">${esc(summary)}</div>
+                <div class="kb-meta">
+                    <span class="kb-pill ${statusClass}">${esc(status)}</span>
+                    <span class="kb-pill ${reuseClass}">${entry.reuse_allowed ? 'reusable' : 'not reusable'}</span>
+                    <span class="kb-pill">${esc(entry.entry_type)}</span>
+                    <span class="kb-pill">${esc(entry.lane)}</span>
+                    <span class="kb-pill">score ${Number(entry.quality_score || 0).toFixed(2)}</span>
+                    <span class="kb-pill">${Number(entry.evidence_count || 0)} sources</span>
+                </div>
+                <div class="draft-dek">Entity: ${esc(entry.entity_name || 'Unknown')} ${entry.source_type ? '| Source: ' + esc(entry.source_type) : ''}</div>
+                <div class="kb-actions">
+                    <button class="btn btn-trigger btn-small" onclick="openKnowledgeDetail(${entry.entry_id})">Evidence</button>
+                    <button class="btn btn-danger btn-small" onclick="blockKnowledgeEntry(${entry.entry_id})">Block</button>
+                    <button class="btn btn-muted btn-small" onclick="markKnowledgeStale(${entry.entry_id})">Mark Stale</button>
+                    <button class="btn btn-approve btn-small" onclick="restoreKnowledgeEntry(${entry.entry_id})">Restore</button>
+                </div>
+            </div>`;
+        }
+
+        async function openKnowledgeDetail(entryId) {
+            const data = await (await fetch(`/api/knowledge/entries/${entryId}`)).json();
+            if (!data.success) {
+                alert(data.error || 'Could not load knowledge entry.');
+                return;
+            }
+            const entry = data.entry;
+            const evidence = (entry.evidence || []).map(ev => `
+                <div class="draft-section">
+                    <strong>${esc(ev.title || ev.source_type || 'Evidence')}</strong>
+                    <div>${esc(ev.evidence_text || 'No snippet captured.')}</div>
+                    ${ev.source_url ? `<div class="source-links"><a href="${esc(ev.source_url)}" target="_blank" rel="noopener">${esc(ev.source_url)}</a></div>` : ''}
+                    <div class="draft-dek">type: ${esc(ev.source_type || 'unknown')} | credibility: ${Number(ev.credibility_score || 0).toFixed(2)}</div>
+                </div>
+            `).join('');
+            const body = `
+                <div class="draft-title">${esc(entry.claim)}</div>
+                <div class="draft-dek">Entity: ${esc(entry.entity_name || 'Unknown')} | ${esc(entry.entry_type)} | ${esc(entry.lane)}</div>
+                <div class="kb-meta">
+                    <span class="kb-pill">${esc(entry.quality_status)}</span>
+                    <span class="kb-pill">${entry.reuse_allowed ? 'reusable' : 'not reusable'}</span>
+                    <span class="kb-pill">quality ${Number(entry.quality_score || 0).toFixed(2)}</span>
+                    <span class="kb-pill">confidence ${Number(entry.confidence_score || 0).toFixed(2)}</span>
+                </div>
+                <div class="draft-section"><strong>Summary</strong>${esc(entry.summary || 'No summary captured.')}</div>
+                ${evidence || '<div class="draft-section">No evidence records found.</div>'}
+            `;
+            const actions = `
+                <button class="btn btn-danger" onclick="blockKnowledgeEntry(${entry.entry_id})">Block</button>
+                <button class="btn btn-muted" onclick="markKnowledgeStale(${entry.entry_id})">Mark Stale</button>
+                <button class="btn btn-approve" onclick="restoreKnowledgeEntry(${entry.entry_id})">Restore Reuse</button>
+            `;
+            openDetailModal('Knowledge Evidence', body, actions);
+        }
+
+        async function blockKnowledgeEntry(entryId) {
+            if (!confirm('Block this knowledge entry from reuse?')) return;
+            const data = await (await fetch(`/api/knowledge/entries/${entryId}/block`, {method:'POST'})).json();
+            if (data.success) { closeDetailModal(); await fetchKnowledgeDb(); }
+            else alert('Could not block entry.');
+        }
+
+        async function markKnowledgeStale(entryId) {
+            const data = await (await fetch(`/api/knowledge/entries/${entryId}/mark-stale`, {method:'POST'})).json();
+            if (data.success) { closeDetailModal(); await fetchKnowledgeDb(); }
+            else alert('Could not mark entry stale.');
+        }
+
+        async function restoreKnowledgeEntry(entryId) {
+            const data = await (await fetch(`/api/knowledge/entries/${entryId}/restore`, {method:'POST'})).json();
+            if (data.success) { closeDetailModal(); await fetchKnowledgeDb(); }
+            else alert('Could not restore entry. It may still need stronger evidence.');
+        }
+
         // Content Studio
         function studioImageUrl(path) {
             return path ? `/images/${path.split(/[\\\\/]/).pop()}` : '';
@@ -2005,7 +3460,7 @@ def index():
         }
 
         async function generateAssetsForIdea(ideaId, assets, btn) {
-            const sample = document.getElementById('studio-asset-sample').checked;
+            const sample = false;
             if (!sample && !confirm('Generate selected assets now? This may use OpenAI/image generation credits.')) return;
             btn.classList.add('loading');
             btn.disabled = true;
@@ -2020,7 +3475,14 @@ def index():
                     return;
                 }
                 await fetchStudioAssets();
-                alert('Assets created. Review them in the panels on the right.');
+                await fetchPins();
+                const blogProduct = data.assets && data.assets.blog && data.assets.blog.product;
+                if (blogProduct && blogProduct.needs_manual_image) {
+                    await fetchAmazonProducts();
+                    alert(`Assets created. Affiliate product added: ${blogProduct.title}\n\nManual task: add a product image in the Amazon Products tab. Publishing can continue without the image; the blog will show the title, description, and link only.`);
+                } else {
+                    alert('Assets created. Review them in the panels on the right.');
+                }
             } catch(e) {
                 alert('Asset generation error: ' + e);
             }
@@ -2055,6 +3517,8 @@ def index():
                         <div class="lab-meta">
                             <span class="lab-chip ${item.wp_url ? 'approved' : 'pending'}">${esc(status)}</span>
                             ${item.content_lane ? `<span class="lab-chip">${esc(item.content_lane)}</span>` : ''}
+                            ${item.product_title ? `<span class="lab-chip">${esc(item.product_title)}</span>` : ''}
+                            ${Number(item.product_needs_manual_image || 0) ? '<span class="lab-chip rejected">needs product image</span>' : ''}
                         </div>
                         <div class="studio-actions">${publish}${open}</div>
                     </div>
@@ -2306,6 +3770,97 @@ def index():
             else alert('Could not reject source.');
         }
 
+        let _amazonProducts = [];
+
+        async function fetchAmazonProducts() {
+            const body = document.getElementById('amazon-products-body');
+            try {
+                _amazonProducts = await (await fetch('/api/amazon-products?include_inactive=true')).json();
+                if (!_amazonProducts.length) {
+                    body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:28px;color:#aaa">No products yet.</td></tr>';
+                    return;
+                }
+                body.innerHTML = _amazonProducts.map(p => `
+                    <tr class="${Number(p.active) ? '' : 'muted'}">
+                        <td>${p.image_url ? `<img class="product-img" src="${esc(p.image_url)}" alt="" onerror="this.style.display='none'">` : '<div class="product-img" style="display:grid;place-items:center;font-size:10px;color:#7a4d12;text-align:center;padding:4px">needs image</div>'}</td>
+                        <td>
+                            <strong>${esc(p.title)}</strong>
+                            <div class="lab-source-url">${esc(p.url)}</div>
+                            <div class="lab-meta">
+                                <span class="lab-chip ${Number(p.active) ? 'approved' : 'rejected'}">${Number(p.active) ? 'active' : 'inactive'}</span>
+                                <span class="lab-chip">${esc(p.price_tier || '')}</span>
+                                ${Number(p.auto_created || 0) ? '<span class="lab-chip">auto-created</span>' : ''}
+                                ${Number(p.needs_manual_image || 0) ? '<span class="lab-chip rejected">needs image</span>' : ''}
+                            </div>
+                        </td>
+                        <td>${esc(p.description || '')}</td>
+                        <td>${esc(p.content_lanes || '')}</td>
+                        <td>${esc(p.keywords || '')}</td>
+                        <td>${Number(p.priority_score || 1).toFixed(1)}</td>
+                        <td>
+                            <div class="action-col">
+                                <button class="btn btn-muted btn-small" onclick="openProductModal(${p.product_id})">Edit</button>
+                                <button class="btn btn-danger btn-small" onclick="deleteAmazonProduct(${p.product_id})" ${Number(p.active) ? '' : 'disabled'}>Delete</button>
+                            </div>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch(e) {
+                body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:28px;color:#aaa">Could not load products: ${esc(e)}</td></tr>`;
+            }
+        }
+
+        function openProductModal(productId=null) {
+            const product = productId ? _amazonProducts.find(p => Number(p.product_id) === Number(productId)) : null;
+            document.getElementById('product-modal-title').textContent = product ? 'Edit Amazon Product' : 'Add Amazon Product';
+            document.getElementById('product-id').value = product ? product.product_id : '';
+            document.getElementById('product-title').value = product ? product.title || '' : '';
+            document.getElementById('product-description').value = product ? product.description || '' : '';
+            document.getElementById('product-url').value = product ? product.url || '' : '';
+            document.getElementById('product-image-url').value = product ? product.image_url || '' : '';
+            document.getElementById('product-keywords').value = product ? product.keywords || '' : '';
+            document.getElementById('product-lanes').value = product ? product.content_lanes || '' : '';
+            document.getElementById('product-price-tier').value = product ? product.price_tier || 'affordable' : 'affordable';
+            document.getElementById('product-priority').value = product ? product.priority_score || 1 : 1;
+            document.getElementById('product-active').checked = product ? Boolean(Number(product.active)) : true;
+            document.getElementById('product-overlay').classList.add('active');
+        }
+
+        function closeProductModal() {
+            document.getElementById('product-overlay').classList.remove('active');
+        }
+
+        async function saveAmazonProduct() {
+            const productId = document.getElementById('product-id').value;
+            const payload = {
+                title: document.getElementById('product-title').value.trim(),
+                description: document.getElementById('product-description').value.trim(),
+                url: document.getElementById('product-url').value.trim(),
+                image_url: document.getElementById('product-image-url').value.trim(),
+                keywords: document.getElementById('product-keywords').value.trim(),
+                content_lanes: document.getElementById('product-lanes').value.trim(),
+                price_tier: document.getElementById('product-price-tier').value.trim() || 'affordable',
+                priority_score: Number(document.getElementById('product-priority').value || 1),
+                active: document.getElementById('product-active').checked
+            };
+            const url = productId ? `/api/amazon-products/${productId}` : '/api/amazon-products';
+            const method = productId ? 'PUT' : 'POST';
+            const data = await (await fetch(url, {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})).json();
+            if (data.success) {
+                closeProductModal();
+                fetchAmazonProducts();
+            } else {
+                alert(data.error || 'Could not save product.');
+            }
+        }
+
+        async function deleteAmazonProduct(productId) {
+            if (!confirm('Delete this product from active matching? Existing blogs will keep their history.')) return;
+            const data = await (await fetch(`/api/amazon-products/${productId}`, {method:'DELETE'})).json();
+            if (data.success) fetchAmazonProducts();
+            else alert(data.error || 'Could not delete product.');
+        }
+
         async function testAmazonMatch() {
             const topic = document.getElementById('amazon-topic').value.trim();
             const lane = document.getElementById('amazon-lane').value;
@@ -2331,14 +3886,16 @@ def index():
                 result.innerHTML = `
                     <div class="lab-item">
                         <div style="display:flex;gap:12px;align-items:flex-start">
-                            <img src="${esc(p.image_url)}" alt="" style="width:86px;height:86px;object-fit:cover;border-radius:10px;background:#eee">
+                            ${p.image_url ? `<img src="${esc(p.image_url)}" alt="" style="width:86px;height:86px;object-fit:cover;border-radius:10px;background:#eee">` : '<div style="width:86px;height:86px;border-radius:10px;background:#fff7ed;color:#7a4d12;display:grid;place-items:center;text-align:center;font-size:12px;padding:8px">needs image</div>'}
                             <div>
                                 <div class="lab-item-title">${esc(p.title)}</div>
                                 <div class="lab-meta">
                                     <span class="lab-chip approved">${esc(p.price_tier || 'product')}</span>
                                     <span class="lab-chip">${esc(p.content_lanes || '')}</span>
+                                    ${p.needs_manual_image ? '<span class="lab-chip rejected">needs image</span>' : ''}
                                 </div>
                                 <p>${esc(p.description)}</p>
+                                ${p.match_notes ? `<div class="lab-source-url">${esc(p.match_notes)}</div>` : ''}
                                 <div class="lab-source-url">${esc(data.affiliate_status)}</div>
                             </div>
                         </div>
@@ -2382,6 +3939,7 @@ def index():
                             <span class="lab-chip approved">preview generated</span>
                             <span class="lab-chip">${esc(data.generation_mode || 'preview')}</span>
                             <span class="lab-chip">${esc(data.product.title)}</span>
+                            ${data.product.needs_manual_image ? '<span class="lab-chip rejected">needs product image</span>' : ''}
                         </div>
                         <div class="draft-section">
                             <strong>Topic used</strong>
@@ -2390,6 +3948,7 @@ def index():
                         <div class="draft-section">
                             <strong>Amazon product inserted</strong>
                             ${esc(data.product.title)} - ${esc(data.product.description)}
+                            ${data.product.match_notes ? `<div class="lab-source-url">${esc(data.product.match_notes)}</div>` : ''}
                         </div>
                         <div class="lab-actions">
                             <a class="btn btn-approve" href="${esc(data.preview_url)}" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">Open Preview</a>
@@ -2504,7 +4063,7 @@ def index():
         }
 
         // Initial load
-        fetchContentStudio();
+        fetchPendingReview();
         </script>
     </body>
     </html>

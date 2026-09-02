@@ -108,6 +108,15 @@ def init_db():
             content_lanes TEXT,
             price_tier TEXT DEFAULT 'affordable',
             priority_score REAL DEFAULT 1.0,
+            solution_tags TEXT,
+            problem_tags TEXT,
+            source_type TEXT DEFAULT 'manual',
+            media_status TEXT DEFAULT 'complete',
+            auto_created INTEGER DEFAULT 0,
+            needs_manual_image INTEGER DEFAULT 0,
+            evidence_notes TEXT,
+            match_notes TEXT,
+            active INTEGER DEFAULT 1,
             last_used TIMESTAMP
         )''')
 
@@ -121,6 +130,24 @@ def init_db():
             cursor.execute("ALTER TABLE amazon_products ADD COLUMN price_tier TEXT DEFAULT 'affordable'")
         if "priority_score" not in amazon_columns:
             cursor.execute("ALTER TABLE amazon_products ADD COLUMN priority_score REAL DEFAULT 1.0")
+        if "active" not in amazon_columns:
+            cursor.execute("ALTER TABLE amazon_products ADD COLUMN active INTEGER DEFAULT 1")
+        if "solution_tags" not in amazon_columns:
+            cursor.execute("ALTER TABLE amazon_products ADD COLUMN solution_tags TEXT")
+        if "problem_tags" not in amazon_columns:
+            cursor.execute("ALTER TABLE amazon_products ADD COLUMN problem_tags TEXT")
+        if "source_type" not in amazon_columns:
+            cursor.execute("ALTER TABLE amazon_products ADD COLUMN source_type TEXT DEFAULT 'manual'")
+        if "media_status" not in amazon_columns:
+            cursor.execute("ALTER TABLE amazon_products ADD COLUMN media_status TEXT DEFAULT 'complete'")
+        if "auto_created" not in amazon_columns:
+            cursor.execute("ALTER TABLE amazon_products ADD COLUMN auto_created INTEGER DEFAULT 0")
+        if "needs_manual_image" not in amazon_columns:
+            cursor.execute("ALTER TABLE amazon_products ADD COLUMN needs_manual_image INTEGER DEFAULT 0")
+        if "evidence_notes" not in amazon_columns:
+            cursor.execute("ALTER TABLE amazon_products ADD COLUMN evidence_notes TEXT")
+        if "match_notes" not in amazon_columns:
+            cursor.execute("ALTER TABLE amazon_products ADD COLUMN match_notes TEXT")
         
         # Publish schedule (3 slots per day, US Eastern)
         cursor.execute('''
@@ -158,6 +185,25 @@ def init_db():
         recipe_columns = {row[1] for row in cursor.fetchall()}
         if "pinterest_image" not in recipe_columns:
             cursor.execute("ALTER TABLE generated_recipes ADD COLUMN pinterest_image TEXT")
+        if "recipe_idea_id" not in recipe_columns:
+            cursor.execute("ALTER TABLE generated_recipes ADD COLUMN recipe_idea_id INTEGER")
+
+        # Recipe title ideas (reviewed before full recipe/image generation)
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS recipe_ideas (
+            idea_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mode TEXT NOT NULL,
+            category TEXT NOT NULL,
+            dish_request TEXT,
+            suggested_title TEXT NOT NULL,
+            rationale TEXT,
+            duplicate_score REAL DEFAULT 0.0,
+            duplicate_warning TEXT,
+            status TEXT DEFAULT 'pending_review',
+            generated_recipe_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
         
         # API Cost tracking
         cursor.execute('''

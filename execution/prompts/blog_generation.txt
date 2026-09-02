@@ -13,9 +13,10 @@ PLATFORM PACKAGE:
 COLLECTED SOURCES:
 {sources_json}
 
-AMAZON PRODUCT TO FEATURE IN SECTION 2:
+AFFILIATE PRODUCT/SEARCH TO FEATURE IN SECTION 2:
 - Title: {product_title}
 - Description: {product_description}
+- Match notes: {product_match_notes}
 
 SOURCING RULES (read first):
 1. Use only facts supported by the collected sources above. Do not invent product ingredients, restaurant procedures, legal claims, medical conclusions, prices, or availability.
@@ -30,7 +31,7 @@ WRITING RULES:
 2. Address the real gluten-free pain point behind this topic, using the content brief's reader_problem and the collected sources — not general assumptions.
 3. The `main_title` must be strong for SEO, natural to read, and based on the topic above. Do NOT use generic phrases like "ultimate guide" or "game changer".
 4. The `ebook_hero_title` is NOT the SEO title. It must promote the free e-book: "Your 7-Day Beginner's Guide to Delicious & Stress-Free Meals." Make it compelling and relevant to the topic.
-5. Section 2 MUST naturally lead into and relate to the Amazon product provided. Write `section_2_content` so the product feels like an organic, practical, reasonably priced recommendation, not a forced ad. Do NOT invent product data — use only the product details provided above.
+5. Section 2 MUST naturally lead into and relate to the affiliate product/search provided. Write `section_2_content` so the recommendation solves the reader's practical pain point and feels organic, useful, and reasonably priced, not like a forced ad. Do NOT invent product data — use only the details provided above. If the title starts with "Helpful Amazon search:", describe it transparently as a useful search starting point, not as a specific tested product.
 6. All section content fields may use basic HTML tags: <p>, <ul>, <ol>, <li>, <strong>, <em>. Do not use <h1>, <h2>, <h3> — those are handled by the template.
 7. All 5 sections must be substantive (150-250 words each), non-redundant, and genuinely useful.
 8. Takeaways must be concise, punchy, and actionable — one sentence each.
@@ -41,9 +42,11 @@ WRITING RULES:
 13. Open with a specific, conversational hook: a small scene, a funny frustration, or a sharp question drawn from the reader_problem. Do not start with "In today's world" or broad encyclopedia-style setup.
 14. Every section must do a different job:
     - Section 1: define the real-world problem or debate, grounded in the collected sources.
-    - Section 2: naturally connect the provided Amazon product to the reader's practical need.
+    - Section 2: naturally connect the provided affiliate product/search to the reader's practical need.
     - Section 3: give concrete steps, checks, comparisons, or decision criteria drawn from the sources.
     - Section 4: include Claire's opinionated but fair take.
     - Section 5: give the reader a clear "what to do next" plan.
 15. Prefer specifics over broad advice, but only specifics the sources actually support. Mention exact checks, shopping behaviors, kitchen systems, comparison criteria, or source types where relevant.
 16. The article should feel like a smart gluten-free friend wrote it after doing the homework, not like a wellness brochure wearing beige pants.
+17. Write final reader-facing prose only. Do not return an outline, placeholders, section prompts, editorial instructions, or notes telling someone what to write later.
+18. For product, restaurant, legal, labeling, and medical claims, use cautious wording and point to the trusted source type that must be checked before publishing. Do not present unverified claims as settled facts.
