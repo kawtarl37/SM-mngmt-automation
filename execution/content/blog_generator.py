@@ -1,9 +1,11 @@
 import re
+
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from execution.config import AMAZON_ASSOCIATE_TAG, BLOG_TEMPLATE_PATH, PROMPTS_DIR
+from execution.content.affiliate_products import select_solution_product_for_blog
 from execution.db import get_connection
 from execution.models import BlogGenerationResponse
 from execution.utils.llm_client import LLMClient
@@ -72,6 +74,15 @@ def get_relevant_product(
     topic_description: str | None = None,
     content_lane: str | None = None,
 ) -> dict | None:
+    """Return a solution-based affiliate product for the blog topic."""
+    return select_solution_product_for_blog(topic_title, topic_description, content_lane)
+
+
+def get_catalog_product(
+    topic_title: str,
+    topic_description: str | None = None,
+    content_lane: str | None = None,
+) -> dict | None:
     """Return the approved Amazon product that best matches the blog topic."""
     topic_tokens = _tokenize(f"{topic_title} {topic_description or ''} {content_lane or ''}")
 
@@ -90,6 +101,7 @@ def get_relevant_product(
                 priority_score,
                 last_used
             FROM amazon_products
+            WHERE COALESCE(active, 1) = 1
         """)
         products = [dict(row) for row in cursor.fetchall()]
 
@@ -181,10 +193,19 @@ def fill_template(template: str, content: BlogGenerationResponse, product: dict)
         html = html.replace(placeholder, value)
 
     # Amazon product block (Make.com-style variables replaced with real data)
+    product_image_url = (product.get("image_url") or "").strip()
+    if not product_image_url:
+        html = re.sub(
+            r"\s*<div class=\"egf-split-card-2025__image\">\s*"
+            r"<img src=\"\{\{49\.`4`\}\}\" alt=\"\{\{49\.`1`\}\}\">\s*"
+            r"</div>",
+            "",
+            html,
+        )
     html = html.replace("{{49.`1`}}", product["title"])
     html = html.replace("{{49.`2`}}", product["description"])
     html = html.replace("{{49.`3`}}", _apply_amazon_associate_tag(product["url"]))
-    html = html.replace("{{49.`4`}}", product["image_url"])
+    html = html.replace("{{49.`4`}}", product_image_url)
 
     # Sanity check — warn if any placeholders remain unfilled
     remaining = re.findall(r"\[([A-Z_0-9]+)\]", html)
@@ -224,7 +245,9 @@ def generate_blog(pin_id: int, forced_title: str | None = None) -> dict | None:
                 p.image_path,
                 i.content_type,
                 i.content_lane,
-                i.angle_type
+                i.angle_type,
+                i.freshness_hook,
+                i.source_hint
             FROM generated_pins p
             LEFT JOIN content_ideas i ON p.idea_id = i.idea_id
             WHERE p.pin_id = ?
@@ -247,7 +270,7 @@ def generate_blog(pin_id: int, forced_title: str | None = None) -> dict | None:
         logger.error("No Amazon products available in DB. Run db.py to seed them.")
         return None
 
-    logger.info(f"Selected product: {product['title']} (last_used: {product['last_used']})")
+    logger.info(f"Selected product: {product['title']} (media_status: {product.get('media_status')})")
 
     # 3. Load prompts
     try:
@@ -262,6 +285,11 @@ def generate_blog(pin_id: int, forced_title: str | None = None) -> dict | None:
         pin_description=pin["description"],
         product_title=product["title"],
         product_description=product["description"],
+        product_match_notes=product.get("match_notes") or "Matched by topic, lane, and reader pain point.",
+        content_lane=pin.get("content_lane") or "unspecified",
+        angle_type=pin.get("angle_type") or "unspecified",
+        freshness_hook=pin.get("freshness_hook") or "Make the value concrete and useful.",
+        source_hint=pin.get("source_hint") or "Use cautious wording and name the source type to verify.",
     )
     if forced_title:
         user_prompt += (
@@ -279,6 +307,28 @@ def generate_blog(pin_id: int, forced_title: str | None = None) -> dict | None:
             response_format=BlogGenerationResponse,
             task_name="blog_generation"
         )
+        problems = _blog_content_problems(content)
+        if problems:
+            retry_prompt = (
+                f"{user_prompt}\n\n"
+                "The previous response was not acceptable for review because: "
+                f"{'; '.join(problems)}.\n\n"
+                "Regenerate a complete final reader-facing blog post. Do not return an outline, "
+                "placeholder, section prompt, or instruction telling an editor what to write later."
+            )
+            content = client.generate_structured(
+                system_prompt=system_prompt,
+                user_prompt=retry_prompt,
+                response_format=BlogGenerationResponse,
+                task_name="blog_generation_retry",
+            )
+            retry_problems = _blog_content_problems(content)
+            if retry_problems:
+                logger.error(
+                    "Generated blog was not saved because it was not final reader-facing copy: %s",
+                    "; ".join(retry_problems),
+                )
+                return None
         if forced_title:
             content.main_title = forced_title
     except Exception as e:
@@ -315,5 +365,66 @@ def generate_blog(pin_id: int, forced_title: str | None = None) -> dict | None:
         "category": content.category,
         "html_content": final_html,
         "product_id": product["product_id"],
+        "product": product,
         "image_path": pin["image_path"],
     }
+
+
+def _blog_content_problems(content: BlogGenerationResponse) -> list[str]:
+    """Return reasons generated blog content should not enter review."""
+
+    sections = [
+        content.section_1_content,
+        content.section_2_content,
+        content.section_3_content,
+        content.section_4_content,
+        content.section_5_content,
+    ]
+    text = "\n".join(
+        [
+            content.main_title,
+            content.intro_paragraph,
+            content.intro_paragraph_1,
+            content.intro_paragraph_2,
+            content.intro_paragraph_3,
+            content.section_1_title,
+            content.section_2_title,
+            content.section_3_title,
+            content.section_4_title,
+            content.section_5_title,
+            *sections,
+            content.takeaway_1,
+            content.takeaway_2,
+            content.takeaway_3,
+            content.takeaway_4,
+            content.takeaway_5,
+        ]
+    )
+    lower_text = text.lower()
+    problems: list[str] = []
+    outline_markers = (
+        "todo",
+        "tbd",
+        "placeholder",
+        "outline",
+        "section should",
+        "this section should",
+        "write a section",
+        "write an intro",
+        "write copy",
+        "add details",
+        "expand on",
+        "fill in",
+        "insert ",
+        "[",
+        "]",
+    )
+    found_markers = [marker for marker in outline_markers if marker in lower_text]
+    if found_markers:
+        problems.append("contains outline or placeholder language: " + ", ".join(found_markers[:4]))
+    if len(text.split()) < 900:
+        problems.append("too short for a complete blog post")
+    short_sections = [str(index + 1) for index, section in enumerate(sections) if len(section.split()) < 80]
+    if short_sections:
+        problems.append("short blog sections: " + ", ".join(short_sections))
+    return problems

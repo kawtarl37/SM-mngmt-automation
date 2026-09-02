@@ -2,6 +2,8 @@ import requests
 from pathlib import Path
 from datetime import datetime, timezone
 import time
+import re
+from html import escape as html_escape
 from execution.config import WP_BASE_URL, WP_USERNAME, WP_APP_PASSWORD, SANDBOX_MODE
 from execution.db import get_connection
 from execution.utils.logger import setup_logger
@@ -81,9 +83,14 @@ def publish_blog_to_wp(blog_id: int) -> dict | None:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT b.blog_id, b.pin_id, b.title, b.html_content, b.category,
-                   p.image_path
+                   p.image_path,
+                   a.title AS product_title,
+                   a.description AS product_description,
+                   a.url AS product_url,
+                   a.image_url AS product_image_url
             FROM blogs b
             JOIN generated_pins p ON b.pin_id = p.pin_id
+            LEFT JOIN amazon_products a ON b.product_id = a.product_id
             WHERE b.blog_id = ?
         """, (blog_id,))
         blog = cursor.fetchone()
@@ -93,6 +100,7 @@ def publish_blog_to_wp(blog_id: int) -> dict | None:
         return None
 
     blog = dict(blog)
+    blog["html_content"] = _refresh_affiliate_product_card(blog)
 
     # Upload featured image
     image_result = upload_image_to_wp(blog["image_path"], blog["title"])
@@ -143,10 +151,10 @@ def publish_blog_to_wp(blog_id: int) -> dict | None:
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE blogs
-            SET wp_post_id = ?, wp_url = ?, wp_featured_image_id = ?,
+            SET html_content = ?, wp_post_id = ?, wp_url = ?, wp_featured_image_id = ?,
                 status = 'published', published_at = ?
             WHERE blog_id = ?
-        """, (wp_post_id, wp_url, featured_image_id, now, blog_id))
+        """, (blog["html_content"], wp_post_id, wp_url, featured_image_id, now, blog_id))
 
         # Also update the pin's destination_url so the Pinterest post links here
         cursor.execute("""
@@ -163,6 +171,43 @@ def publish_blog_to_wp(blog_id: int) -> dict | None:
         "blog_id":     blog_id,
         "pin_id":      blog["pin_id"],
     }
+
+
+def _refresh_affiliate_product_card(blog: dict) -> str:
+    """Use the latest product table media/link before publishing a generated blog."""
+    html_content = blog["html_content"]
+    image_url = (blog.get("product_image_url") or "").strip()
+    title = blog.get("product_title") or ""
+
+    if not image_url:
+        return re.sub(
+            r"\s*<div class=\"egf-split-card-2025__image\">\s*"
+            r"<img[^>]*>\s*"
+            r"</div>",
+            "",
+            html_content,
+        )
+
+    image_block = (
+        '\n      <div class="egf-split-card-2025__image">\n'
+        f'        <img src="{html_escape(image_url, quote=True)}" alt="{html_escape(title, quote=True)}">\n'
+        "      </div>"
+    )
+    if "egf-split-card-2025__image" in html_content:
+        return re.sub(
+            r"<div class=\"egf-split-card-2025__image\">\s*<img[^>]*>\s*</div>",
+            image_block.strip(),
+            html_content,
+            count=1,
+        )
+
+    return re.sub(
+        r"(<div class=\"egf-split-card-2025__content\">.*?</div>)(\s*</div>\s*</section>)",
+        rf"\1{image_block}\2",
+        html_content,
+        count=1,
+        flags=re.DOTALL,
+    )
 
 
 # ──────────────────────────────────────────────

@@ -247,6 +247,51 @@ The research layer persists reusable data in:
 | `research_facts` | Extracted claims with evidence and confidence |
 | `content_briefs` | Portable editorial briefs for any output platform |
 | `source_notifications` | Review notifications when new sources need approval |
+| `knowledge_entities` | Normalized brands, products, restaurants, apps, laws, studies, and community themes |
+| `knowledge_entries` | Quality-gated reusable facts, sentiments, product mentions, warnings, tips, and recurring questions |
+| `knowledge_evidence` | Evidence snippets and source URLs supporting knowledge entries |
+| `knowledge_usage` | Records which generated assets reused a knowledge entry |
+
+---
+
+## Knowledge Database
+
+The Knowledge DB is the reusable memory layer for the intelligence engine. It copies and normalizes accumulated data from research tables, drafts, and trend tables without deleting the original records.
+
+Use the ingestion service to populate or refresh it:
+
+```bash
+python -c "from execution.knowledge.service import ingest_current_intelligence; print(ingest_current_intelligence())"
+```
+
+Knowledge entries do not require manual approval before reuse when deterministic quality checks pass. Auto-reuse requires:
+
+- an intelligence-engine origin
+- evidence or structured source data
+- enough confidence/credibility for the lane
+- non-stale and non-blocked status
+
+Sensitive lanes such as labeling, recalls, medical/science, allergen safety, and restaurant procedures use stricter source checks. Community data may be reused as `community_sentiment` or `recurring_question` for tone, pain points, and framing; it must not be treated as verified factual evidence.
+
+Dashboard/API endpoints:
+
+```text
+GET  /api/knowledge/stats
+GET  /api/knowledge/entries
+GET  /api/knowledge/entries/<entry_id>
+POST /api/knowledge/ingest
+POST /api/knowledge/entries/<entry_id>/block
+POST /api/knowledge/entries/<entry_id>/restore
+POST /api/knowledge/entries/<entry_id>/mark-stale
+```
+
+Generation code should retrieve reusable entries with:
+
+```python
+retrieve_reusable_knowledge(topic_title, lane, limit=10)
+```
+
+Whenever generated content uses KB context, log the relationship in `knowledge_usage`.
 
 ---
 
@@ -369,6 +414,8 @@ Implementation:
 - `sample`: if true, creates deterministic no-token ideas
 - `persist`: if true, saves ideas to `content_ideas`
 
+Content Studio should expose `idea_count` as an explicit user choice, including a one-idea option for focused ideation while preserving the three-idea batch option.
+
 `POST /api/editorial/lanes/<lane>/content` accepts:
 
 - `topic_title`: topic to turn into content
@@ -386,6 +433,8 @@ Sample mode is for UI and contract testing only. Non-sample content creation may
 - `pin`: creates/updates a `generated_pins` row with title, description, keywords, and image
 - `blog`: creates a `blogs` row linked to the pin
 - `newsletter`: creates a text-only `content_drafts` row with `platform = 'newsletter'`
+
+Reviewable Content Studio assets must be complete reader-facing deliverables, not outlines, prompts, placeholders, or sample records. Sample asset generation may be used only for non-persisted testing; persisted `pin`, `blog`, and `newsletter` records must be final drafts ready for human review.
 
 Generated assets are intentionally separated in the dashboard:
 

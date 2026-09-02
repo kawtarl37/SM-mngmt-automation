@@ -17,6 +17,7 @@ from execution.models import BlogGenerationResponse, CaptionGenerationResponse
 
 
 DEFAULT_ASSETS = ("pin", "blog", "newsletter")
+LEGACY_GENERATE_CONTENT_IMAGE_PROMPT = "image_prompt_template.txt"
 
 
 def create_assets_from_idea(
@@ -26,6 +27,9 @@ def create_assets_from_idea(
     persist: bool = True,
 ) -> dict:
     """Create selected publishing assets from a content_ideas row."""
+
+    if sample and persist:
+        raise ValueError("Sample assets cannot be saved to review. Generate final assets or use persist=false.")
 
     idea = _get_idea(idea_id)
     requested = _normalize_assets(assets)
@@ -73,10 +77,14 @@ def list_content_assets(limit: int = 30) -> dict:
                 p.status AS pin_status,
                 i.idea_id,
                 i.content_lane,
-                i.angle_type
+                i.angle_type,
+                a.title AS product_title,
+                a.media_status AS product_media_status,
+                a.needs_manual_image AS product_needs_manual_image
             FROM blogs b
             LEFT JOIN generated_pins p ON b.pin_id = p.pin_id
             LEFT JOIN content_ideas i ON p.idea_id = i.idea_id
+            LEFT JOIN amazon_products a ON b.product_id = a.product_id
             ORDER BY b.created_at DESC, b.blog_id DESC
             LIMIT ?
             """,
@@ -224,6 +232,7 @@ def _build_pin_asset(idea: dict, sample: bool, persist: bool) -> dict:
             caption["title"],
             pin_id,
             subtitle=_subtitle_for_idea(idea),
+            prompt_template_name=LEGACY_GENERATE_CONTENT_IMAGE_PROMPT,
         )
         if image_path:
             with get_connection() as conn:
@@ -252,7 +261,12 @@ def _build_blog_asset(idea: dict, pin: dict, sample: bool, persist: bool) -> dic
         content = _sample_blog_content(idea)
         html = fill_template(load_html_template(), content, product)
         if not persist:
-            return {"blog_id": None, "title": content.main_title, "category": content.category}
+            return {
+                "blog_id": None,
+                "title": content.main_title,
+                "category": content.category,
+                "product": _product_summary(product),
+            }
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -264,7 +278,12 @@ def _build_blog_asset(idea: dict, pin: dict, sample: bool, persist: bool) -> dic
             )
             blog_id = int(cursor.lastrowid)
             conn.commit()
-        return {"blog_id": blog_id, "title": content.main_title, "category": content.category}
+        return {
+            "blog_id": blog_id,
+            "title": content.main_title,
+            "category": content.category,
+            "product": _product_summary(product),
+        }
 
     if not persist:
         return {"blog_id": None, "title": idea["title"], "category": "Preview only"}
@@ -276,6 +295,19 @@ def _build_blog_asset(idea: dict, pin: dict, sample: bool, persist: bool) -> dic
         "blog_id": blog["blog_id"],
         "title": blog["title"],
         "category": blog["category"],
+        "product": _product_summary(blog.get("product") or {}),
+    }
+
+
+def _product_summary(product: dict) -> dict:
+    return {
+        "product_id": product.get("product_id"),
+        "title": product.get("title"),
+        "description": product.get("description"),
+        "image_url": product.get("image_url"),
+        "media_status": product.get("media_status") or ("complete" if product.get("image_url") else "needs_image"),
+        "needs_manual_image": bool(product.get("needs_manual_image") or not product.get("image_url")),
+        "match_notes": product.get("match_notes"),
     }
 
 
@@ -398,13 +430,36 @@ def _generate_caption(idea: dict) -> dict:
         content_lane=idea.get("content_lane") or "unspecified",
         angle_type=idea.get("angle_type") or "unspecified",
         freshness_hook=idea.get("freshness_hook") or idea.get("source_hint") or "Make the value concrete.",
+        source_hint=idea.get("source_hint") or "Use cautious wording and name the source type to verify.",
     )
-    response: CaptionGenerationResponse = LLMClient().generate_structured(
+    client = LLMClient()
+    response: CaptionGenerationResponse = client.generate_structured(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         response_format=CaptionGenerationResponse,
         task_name="single_caption_generation",
     )
+    problems = _caption_problems(response)
+    if problems:
+        retry_prompt = (
+            f"{user_prompt}\n\n"
+            "The previous response was not acceptable for review because: "
+            f"{'; '.join(problems)}.\n\n"
+            "Regenerate final Pinterest copy only. Do not return an outline, placeholder, concept note, "
+            "or instruction to write copy later."
+        )
+        response = client.generate_structured(
+            system_prompt=system_prompt,
+            user_prompt=retry_prompt,
+            response_format=CaptionGenerationResponse,
+            task_name="single_caption_generation_retry",
+        )
+        retry_problems = _caption_problems(response)
+        if retry_problems:
+            raise RuntimeError(
+                "Generated pin copy was not saved because it was not final reader-facing copy: "
+                + "; ".join(retry_problems)
+            )
     return {
         "title": response.pin_title,
         "description": f"{response.pin_description}\n\n" + " ".join(response.hashtags),
@@ -412,6 +467,35 @@ def _generate_caption(idea: dict) -> dict:
     }
 
 
+
+def _caption_problems(response: CaptionGenerationResponse) -> list[str]:
+    text = " ".join([response.pin_title, response.pin_description, response.alt_text])
+    lower_text = text.lower()
+    problems: list[str] = []
+    outline_markers = (
+        "todo",
+        "tbd",
+        "placeholder",
+        "outline",
+        "write a caption",
+        "write pin copy",
+        "caption should",
+        "pin description should",
+        "add details",
+        "insert ",
+        "[",
+        "]",
+    )
+    found_markers = [marker for marker in outline_markers if marker in lower_text]
+    if found_markers:
+        problems.append("contains outline or placeholder language: " + ", ".join(found_markers[:4]))
+    if len(response.pin_title.strip()) < 12:
+        problems.append("pin title is too short")
+    if len(response.pin_description.split()) < 20:
+        problems.append("pin description is too short")
+    if not response.hashtags:
+        problems.append("missing hashtags")
+    return problems
 def _sample_caption(idea: dict) -> dict:
     tags = ["#glutenfree", "#glutenfreelife", "#easyglutenfree"]
     return {
@@ -501,11 +585,15 @@ def _normalize_assets(assets: list[str] | None) -> list[str]:
 
 def _subtitle_for_idea(idea: dict) -> str:
     lane = idea.get("content_lane") or ""
-    if lane in {"laws_labeling", "science_health"}:
+    if lane in {"laws_labeling", "science_health", "comparison"}:
         return "Know Your Ingredients"
     if lane in {"gadgets_tools", "organization_life", "apps_digital"}:
-        return "Tips & Tools"
-    return "Easy Gluten-Free Help"
+        return "Tips & Tricks"
+    if lane in {"restaurants_travel", "community_questions"}:
+        return "Living Gluten-Free"
+    if lane in {"product_watch"}:
+        return "Healthy Living"
+    return "Easy, Delicious & Gluten-Free"
 
 
 def _newsletter_text(draft: dict) -> str:

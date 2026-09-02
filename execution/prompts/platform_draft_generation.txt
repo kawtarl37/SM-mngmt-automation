@@ -20,10 +20,10 @@ RULES:
 3. If a source says `status = failed`, mention it only in `verification_notes`; do not use it as factual support.
 4. If a claim requires a fresh official check before publishing, put that in `verification_notes`.
 5. Make the draft specific to the requested platform:
-   - blog: substantive sections with useful context and source-backed claims.
-   - newsletter: personal opening, quick hits, and a clear reader action.
-   - pinterest: punchy title, description-ready sections, and visual direction.
-   - app: concise card-style sections with source confidence and action items.
+   - blog: complete article prose with substantive sections, useful context, and source-backed claims.
+   - newsletter: complete email/newsletter copy with a personal opening, quick hits, and a clear reader action.
+   - pinterest: final pin title, final pin description copy, and a concrete visual direction.
+   - app: complete concise card copy with source confidence and action items.
 6. Do not use generic beginner intros like "In today's world".
 7. Avoid banned phrases: "ultimate guide", "game changer", "you won't believe", "life changing".
 8. No emojis.
@@ -31,5 +31,7 @@ RULES:
    - `ready_for_review` if sources are adequate for a human review draft.
    - `needs_more_sources` if useful but under-sourced.
    - `do_not_publish_yet` if the draft would rely on failed or weak sources.
+10. The response must be the final reader-facing deliverable for review. Do not return an outline, placeholders, writing prompts, editorial instructions, section briefs, or notes telling someone what to write later.
+11. If sources are thin, still write the useful cautious final copy that can be reviewed, and put source limitations in `verification_notes`.
 
 Return the response in the requested structured JSON schema.

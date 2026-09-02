@@ -203,7 +203,12 @@ def _generate_with_gemini(prompt: str) -> Image.Image:
     return image
 
 
-def generate_pin_image(dish_name: str, pin_id: int, subtitle: str | None = None) -> str | None:
+def generate_pin_image(
+    dish_name: str,
+    pin_id: int,
+    subtitle: str | None = None,
+    prompt_template_name: str = "image_prompt_template.txt",
+) -> str | None:
     """Generate a Pinterest pin image with the configured provider, then save a local JPG."""
     provider = IMAGE_GENERATION_PROVIDER.lower()
     if provider not in {"openai", "gemini"}:
@@ -211,10 +216,10 @@ def generate_pin_image(dish_name: str, pin_id: int, subtitle: str | None = None)
         return None
 
     try:
-        with open(PROMPTS_DIR / "image_prompt_template.txt", "r", encoding="utf-8") as f:
+        with open(PROMPTS_DIR / prompt_template_name, "r", encoding="utf-8") as f:
             template = f.read()
     except Exception as e:
-        logger.error(f"Failed to load image prompt template: {e}")
+        logger.error(f"Failed to load image prompt template '{prompt_template_name}': {e}")
         return None
 
     prompt = template.format(dish_name=dish_name)

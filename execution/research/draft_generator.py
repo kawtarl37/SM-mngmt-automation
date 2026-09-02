@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from execution.config import PROMPTS_DIR
 from execution.db import get_connection
+from execution.knowledge.service import log_knowledge_usage, retrieve_reusable_knowledge
 from execution.models import PlatformDraftResponse
 from execution.research.research_runner import run_research
 from execution.research.schema import ensure_research_schema
@@ -35,16 +36,37 @@ def generate_research_draft(
         limit_per_task=limit_per_task,
         persist=persist,
     )
-    draft = _generate_draft_from_research(research_result)
+    brief = research_result["brief"]
+    knowledge_entries = retrieve_reusable_knowledge(
+        topic_title=brief["topic_title"],
+        lane=brief["lane"],
+        limit=10,
+        include_sentiment=True,
+    )
+    draft = _generate_draft_from_research(research_result, knowledge_entries)
     draft_id = save_content_draft(research_result, draft) if persist else None
+    if persist and draft_id:
+        for entry in knowledge_entries:
+            log_knowledge_usage(
+                entry_id=entry["entry_id"],
+                asset_type="content_draft",
+                asset_id=draft_id,
+                topic_title=brief["topic_title"],
+                platform=brief["platform"],
+                notes="Supplied as reusable KB context during draft generation.",
+            )
     return {
         "draft_id": draft_id,
         "draft": draft.model_dump(),
         "research": research_result,
+        "knowledge_entries": knowledge_entries,
     }
 
 
-def _generate_draft_from_research(research_result: dict) -> PlatformDraftResponse:
+def _generate_draft_from_research(
+    research_result: dict,
+    knowledge_entries: list[dict] | None = None,
+) -> PlatformDraftResponse:
     system_prompt = (PROMPTS_DIR / "brand_system_prompt.txt").read_text(encoding="utf-8")
     prompt_template = (PROMPTS_DIR / "platform_draft_generation.txt").read_text(encoding="utf-8")
     brief = research_result["brief"]
@@ -60,14 +82,112 @@ def _generate_draft_from_research(research_result: dict) -> PlatformDraftRespons
         platform_package_json=json.dumps(package, indent=2),
         sources_json=json.dumps(sources, indent=2),
     )
+    if knowledge_entries:
+        user_prompt += (
+            "\n\nREUSABLE KNOWLEDGE DATABASE CONTEXT:\n"
+            "Use these quality-gated entries only where relevant. Community sentiment entries may be used "
+            "for reader pain points and framing, not as verified factual claims.\n"
+            f"{json.dumps(_knowledge_prompt_payload(knowledge_entries), indent=2)}"
+        )
 
     client = LLMClient()
-    return client.generate_structured(
+    draft = client.generate_structured(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         response_format=PlatformDraftResponse,
         task_name=f"{brief['platform']}_draft_generation",
     )
+    problems = _final_draft_problems(draft, brief["platform"])
+    if not problems:
+        return draft
+
+    retry_prompt = (
+        f"{user_prompt}\n\n"
+        "The previous response was not acceptable for review because: "
+        f"{'; '.join(problems)}.\n\n"
+        "Regenerate the asset as complete final reader-facing copy. Do not return an outline, "
+        "writing instructions, section prompts, placeholders, or notes telling an editor what to add."
+    )
+    retry = client.generate_structured(
+        system_prompt=system_prompt,
+        user_prompt=retry_prompt,
+        response_format=PlatformDraftResponse,
+        task_name=f"{brief['platform']}_draft_generation_retry",
+    )
+    retry_problems = _final_draft_problems(retry, brief["platform"])
+    if retry_problems:
+        raise RuntimeError(
+            "Generated draft was not saved because it was not final reader-facing copy: "
+            + "; ".join(retry_problems)
+        )
+    return retry
+
+
+def _knowledge_prompt_payload(entries: list[dict]) -> list[dict]:
+    return [
+        {
+            "entry_id": entry["entry_id"],
+            "entry_type": entry["entry_type"],
+            "entity": entry.get("entity_name"),
+            "claim": entry["claim"],
+            "summary": entry.get("summary"),
+            "quality_score": entry.get("quality_score"),
+            "source_type": entry.get("source_type"),
+        }
+        for entry in entries
+    ]
+
+
+def _final_draft_problems(draft: PlatformDraftResponse, platform: str) -> list[str]:
+    """Return reasons a platform draft is not ready to enter review."""
+
+    sections = draft.sections or []
+    problems: list[str] = []
+    if len(sections) < 3:
+        problems.append("fewer than three content sections")
+
+    body_text = "\n".join(
+        [draft.title, draft.dek, draft.call_to_action]
+        + [section.heading for section in sections]
+        + [section.body for section in sections]
+    )
+    lower_text = body_text.lower()
+    outline_markers = (
+        "todo",
+        "tbd",
+        "placeholder",
+        "outline",
+        "section should",
+        "this section should",
+        "write a section",
+        "write an intro",
+        "write copy",
+        "add details",
+        "expand on",
+        "fill in",
+        "insert ",
+        "prompt:",
+        "[",
+        "]",
+    )
+    found_markers = [marker for marker in outline_markers if marker in lower_text]
+    if found_markers:
+        problems.append("contains outline or placeholder language: " + ", ".join(found_markers[:4]))
+
+    minimum_words = {
+        "blog": 600,
+        "newsletter": 120,
+        "pinterest": 45,
+        "app": 60,
+    }.get(platform, 100)
+    if len(body_text.split()) < minimum_words:
+        problems.append(f"too short for a complete {platform} deliverable")
+
+    empty_sections = [section.heading or f"section {index + 1}" for index, section in enumerate(sections) if not section.body.strip()]
+    if empty_sections:
+        problems.append("empty section bodies: " + ", ".join(empty_sections[:3]))
+
+    return problems
 
 
 def save_content_draft(research_result: dict, draft: PlatformDraftResponse) -> int:
